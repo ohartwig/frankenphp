@@ -1,0 +1,27 @@
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: false
+
+  Koh\FrankenPHP\:
+    resource: '../Classes/*'
+    exclude:
+      - '../Classes/Domain/Model/*'
+      - '../Classes/Runtime/*'
+
+  Koh\FrankenPHP\EventListener\SystemInformationToolbar:
+    tags: { name: event.listener }
+
+  Koh\FrankenPHP\EventListener\CacheInvalidationListener:
+    tags:
+      - name: event.listener
+        identifier: 'caddy-cache-general-flush'
+        method: 'onGeneralCacheFlush'
+        event: TYPO3\CMS\Core\Cache\Event\CacheFlushEvent
+
+#  Koh\FrankenPHP\Service\CaddyCacheService:
+#    arguments:
+#      $logger: '@logger'
+#      $httpClientFactory: '@TYPO3\CMS\Core\Http\Client\GuzzleClientFactory'
+#      $siteFinder: '@TYPO3\CMS\Core\Site\SiteFinder'

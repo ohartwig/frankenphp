@@ -1,0 +1,133 @@
+<html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers" data-namespace-typo3-fluid="true">
+
+<f:layout name="Default" />
+
+<f:section name="Content">
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:module.title" default="Caddy Cache Management" />
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <p class="card-text">
+                        <f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:module.description" default="Manage HTTP cache and, if active, CDN invalidation for your TYPO3 sites." />
+                    </p>
+
+                    <!-- Flush All Cache -->
+                    <div class="mb-4">
+                        <h4><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:flush_all.title" default="Flush All Cache" /></h4>
+                        <p><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:flush_all.description" default="This will flush the HTTP cache and, if active, CDN for all configured sites." /></p>
+
+                        <f:link.action
+                            action="flush"
+                            class="btn btn-danger"
+                            additionalAttributes="{data-confirm: 'Are you sure you want to flush all cache?'}">
+                            <f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:button.flush_all" default="Flush All Cache" />
+                        </f:link.action>
+                    </div>
+
+                    <!-- Site-specific Cache Flush -->
+                    <div class="mb-4">
+                        <h4><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:flush_site.title" default="Flush Site Cache" /></h4>
+                        <p><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:flush_site.description" default="Flush cache for individual Website." /></p>
+
+                        <f:if condition="{sites}">
+                            <f:then>
+                                <div class="table-responsive">
+                                    <table class="table table-striped">
+                                        <thead>
+                                        <tr>
+                                            <th><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:table.site_identifier" default="Site Identifier" /></th>
+                                            <th><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:table.base_url" default="Base URL" /></th>
+                                            <th><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:table.languages" default="Languages" /></th>
+                                            <th><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:table.actions" default="Actions" /></th>
+                                        </tr>
+                                        </thead>
+                                        <tbody>
+                                        <f:for each="{sites}" as="site">
+                                            <tr>
+                                                <td>{site.identifier}</td>
+                                                <td>
+                                                    <f:for each="{site.allLanguages}" as="language" iteration="iteration">
+                                                        {language.base}<f:if condition="{iteration.isLast}"><f:else><br /></f:else></f:if>
+                                                    </f:for>
+                                                </td>
+                                                <td>
+                                                    <f:for each="{site.allLanguages}" as="language" iteration="iteration">
+                                                        {language.title} ({language.locale})<f:if condition="{iteration.isLast}"><f:else><br /></f:else></f:if>
+                                                    </f:for>
+                                                </td>
+                                                <td>
+                                                    <f:link.action
+                                                        action="flushSite"
+                                                        arguments="{site: site.identifier}"
+                                                        class="btn btn-warning btn-sm"
+                                                        additionalAttributes="{data-confirm: 'Are you sure you want to flush cache for site {site.identifier}?'}">
+                                                        <f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:button.flush_site" default="Flush Site Cache" />
+                                                    </f:link.action>
+                                                </td>
+                                            </tr>
+                                        </f:for>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </f:then>
+                            <f:else>
+                                <div class="alert alert-info">
+                                    <f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:no_sites" default="No sites configured." />
+                                </div>
+                            </f:else>
+                        </f:if>
+                    </div>
+
+                    <!-- Cache Status Information -->
+                    <div class="mb-4">
+                        <h4><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:status.title" default="Cache Status" /></h4>
+                        <div class="alert alert-info">
+                            <strong><f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:status.automatic" default="Automatic Cache Invalidation:" /></strong><br />
+                            <f:translate key="LLL:EXT:frankenphp/Resources/Private/Language/locallang.xlf:status.automatic_description" default="Cache will be automatically invalidated when pages or content are updated in TYPO3." />
+                        </div>
+
+                        <h5>Keys</h5>
+                        <table class="table table-striped">
+                            <thead>
+                            <tr>
+                                <th>Key</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <f:for each="{keys}" as="key">
+                                <tr>
+                                    <td>{key}</td>
+                                </tr>
+                            </f:for>
+                            </tbody>
+                        </table>
+                        <h5>Surrogate Keys</h5>
+                        <table class="table table-striped">
+                            <thead>
+                            <tr>
+                                <th>Key</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <f:for each="{surrogate_keys}" as="key">
+                                <tr>
+                                    <td>{key}</td>
+                                </tr>
+                            </f:for>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <f:asset.script identifier="frankenphp-confirm" src="EXT:frankenphp/Resources/Public/JavaScript/confirm.js" />
+</f:section>
+
+</html>

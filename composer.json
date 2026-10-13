@@ -1,0 +1,69 @@
+{
+    "name": "koh/frankenphp",
+    "description": "TYPO3 FrankenPHP integration",
+    "type": "typo3-cms-extension",
+    "license": "MIT",
+    "homepage": "https://ole-hartwig.eu/open-source/frankenphp",
+    "authors": [
+        {
+            "name": "Kai Ole Hartwig",
+            "email": "mail@ole-hartwig.eu",
+            "homepage": "https://ole-hartwig.eu",
+            "role": "Developer"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/ohartwig/frankenphp/issues",
+        "source": "https://github.com/ohartwig/frankenphp",
+        "security": "https://github.com/ohartwig/frankenphp/blob/main/SECURITY.md"
+    },
+    "require": {
+        "php": "^8.5.11",
+        "typo3/cms-backend": "^13.4 || ^14.0",
+        "typo3/cms-core": "^13.4 || ^14.0"
+    },
+    "require-dev": {
+        "koh/dev-typo3": "^1.0"
+    },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://git.ole-hartwig.eu/api/v4/group/175/-/packages/composer/packages.json",
+            "only": [
+                "hn/typo3-mcp-server",
+                "netresearch/nr-passkeys-be"
+            ]
+        },
+        {
+            "type": "composer",
+            "url": "https://git.ole-hartwig.eu/api/v4/group/1091/-/packages/composer/packages.json",
+            "only": [
+                "koh/*"
+            ]
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Koh\\FrankenPHP\\": "Classes/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Koh\\FrankenPHP\\Tests\\": "Tests/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "infection/extension-installer": true,
+            "phpstan/extension-installer": true,
+            "sbuerk/typo3-cmscomposerinstallers-testingframework-bridge": true,
+            "typo3/class-alias-loader": true,
+            "typo3/cms-composer-installers": true
+        }
+    },
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "frankenphp"
+        }
+    }
+}

@@ -1,0 +1,41 @@
+# cat=basic; type=boolean; label=Enabled:Send cache invalidations to the proxy. Off = no PURGE and no admin API request at all, e.g. local development without caddy-proxy
+enabled = 1
+
+# cat=basic; type=string; label=Caddy Server Host:Host or IP address where Caddy server is running
+caddyHost = localhost
+
+# cat=basic; type=int+; label=Caddy Server Port:Port where Caddy cache handler API is available
+caddyPort = 2019
+
+# cat=basic; type=options[http,https]; label=Protocol:Protocol to use for API calls
+protocol = http
+
+# cat=basic; type=string; label=API Endpoint:Souin cache API endpoint path
+apiEndpoint = /souin-api/souin
+
+# cat=basic; type=string; label=API Key:Optional API key for authentication (leave empty if not required)
+apiKey =
+
+# cat=basic; type=boolean; label=Enable Debug Logging:Enable detailed logging for debugging
+enableDebugLogging = 0
+
+# cat=advanced; type=int+; label=HTTP Timeout:Timeout for HTTP requests in seconds
+httpTimeout = 5
+
+# cat=advanced; type=boolean; label=Invalidate All Sites:Invalidate cache for all configured sites when flushing
+invalidateAllSites = 1
+
+# cat=advanced; type=string; label=Cache Tags Header:Header name for cache tags (Surrogate-Key)
+cacheTagsHeader = Surrogate-Key
+
+# cat=mtls; type=string; label=Client Certificate:Path to the mTLS client cert (PEM) for the proxy. Empty = no client cert (plain HTTP)
+tlsClientCert =
+
+# cat=mtls; type=string; label=Client Key:Path to the mTLS client private key (PEM)
+tlsClientKey =
+
+# cat=mtls; type=string; label=CA Bundle:Path to the CA bundle (PEM) used to verify the proxy cert. Empty = use tlsVerify
+tlsCaBundle =
+
+# cat=mtls; type=boolean; label=Verify TLS:Verify the proxy server certificate (used when no CA bundle is set)
+tlsVerify = 1

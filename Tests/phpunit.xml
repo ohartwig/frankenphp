@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    This file did not exist, and its absence was the whole problem: the
+    test-phpunit-unit component creates its job only where it finds a PHPUnit
+    configuration, so the test suite in Tests/Unit/ has been in the repository
+    without ever being executed. The pipeline was green and said nothing about
+    it — the exact failure mode that component's own comments describe.
+
+    executionOrder is "depends,random" rather than "depends,defects" because
+    Infection rewrites this file into a copy of its own with
+    recordTestRunHistory="false" forced on; ordering by defects then raises a
+    runner warning before the first test, and the forced stopOnDefect turns it
+    into "No tests executed!" and exit 1. Random order is what Infection asks
+    for anyway.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/12.0/phpunit.xsd"
+         bootstrap="../vendor/autoload.php"
+         colors="true"
+         executionOrder="depends,random"
+         resolveDependencies="true"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>Unit</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">../Classes</directory>
+        </include>
+    </source>
+</phpunit>

@@ -1,0 +1,8 @@
+# Release configuration for yasrt; the shared defaults come from the CI
+# component. Only what this repository does differently is stated here.
+product: extension
+versioning:
+  # The package continues moselwal/frankenphp, whose last release was 5.3.5,
+  # under a new name and a fresh history; the line continues with the next
+  # minor instead of starting over.
+  initial: "5.4.0"
