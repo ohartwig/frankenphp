@@ -3,6 +3,13 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.4.3](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.2...v5.4.3) (2026-10-18)
+
+### :bug: Fixes
+
+* admit PHP 8.3 and test the floor on it ([5f116e7](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/5f116e760f28f280b5de4c7cb119d1f3e64f9ce3))
+* **docs:** write the README in English throughout ([8d49533](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/8d495336a457fe5b1d2cca033c8c7e75368fbb5d))
+
 ## [5.4.2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.1...v5.4.2) (2026-10-16)
 
 ### :repeat: Chores
