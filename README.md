@@ -1,65 +1,65 @@
 # koh/frankenphp
 
-TYPO3-Extension für FrankenPHP-Worker-Mode-Integration und Caddy/Souin-HTTP-Cache-Invalidierung.
+TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cache invalidation.
 
-- **Extension-Key:** `frankenphp`
+- **Extension key:** `frankenphp`
 - **Namespace:** `Koh\FrankenPHP`
-- **Voraussetzungen:** TYPO3 13.4 / 14.x, PHP 8.3+, FrankenPHP 1.x, Caddy 2.11+ (mit `cache-handler`/Souin)
+- **Requirements:** TYPO3 13.4 / 14.x, PHP 8.3+, FrankenPHP 1.x, Caddy 2.11+ (with `cache-handler`/Souin)
 
 ## Features
 
-- **FrankenPHP Frontend Worker** — Request-Klassifizierung trennt Frontend-Requests (Worker-Mode) von Backend/Install-Tool. Worker bootstrappt TYPO3 pro Request, kein State-Sharing.
-- **103 Early Hints** — Echte RFC-8297-Antworten via `headers_send(103)` aus dem AssetCollector. CSS/JS-Preloads starten parallel zum Server-Rendering.
-- **Caddy/Souin Cache-Invalidierung** — REST-API-basiert via PURGE/DELETE. Drei Strategien: URL-basiert, Tag-basiert (Surrogate-Key), Wildcard.
-- **PSR-14 Event-Architektur + DataHandler-Hook** — Auto-Invalidierung bei Page-/Content-/File-Änderungen.
-- **Backend-Modul** — Admin Tools → manuelle Flushes und Cache-Key-Inspection.
+- **FrankenPHP frontend worker** — request classification separates frontend requests (worker mode) from the backend and the Install Tool. The worker bootstraps TYPO3 per request; no state is shared.
+- **103 Early Hints** — real RFC 8297 responses via `headers_send(103)` from the AssetCollector. CSS/JS preloads start in parallel with server-side rendering.
+- **Caddy/Souin cache invalidation** — based on the REST API via PURGE/DELETE. Three strategies: by URL, by tag (Surrogate-Key), wildcard.
+- **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
+- **Backend module** — Admin Tools → manual flushes and cache-key inspection.
 
-## Komponenten
+## Components
 
-### Frontend-Worker
+### Frontend worker
 
-| Klasse | Aufgabe |
+| Class | Responsibility |
 |---|---|
-| `Classes/Runtime/FrontendWorker` | Worker-Loop mit `frankenphp_handle_request()`, pro Request frisches TYPO3-Bootstrap mit `REQUESTTYPE_FE` |
-| `Classes/Runtime/RequestClassifier` | Pure-PHP (keine TYPO3-Deps), klassifiziert Requests aus `$_SERVER` in Frontend/Backend/Install. Path- ODER host-basierte Backend-Erkennung |
-| `Resources/Private/Worker/frontend.php` | Worker-Entry-Point (als `worker` im Caddyfile eintragen) |
+| `Classes/Runtime/FrontendWorker` | Worker loop with `frankenphp_handle_request()`, a fresh TYPO3 bootstrap per request with `REQUESTTYPE_FE` |
+| `Classes/Runtime/RequestClassifier` | Pure PHP (no TYPO3 dependencies), classifies requests from `$_SERVER` as frontend/backend/install. Backend detection by path OR by host |
+| `Resources/Private/Worker/frontend.php` | Worker entry point (register it as `worker` in the Caddyfile) |
 
-`Classes/Runtime/` ist von der DI-Auto-Registrierung ausgenommen, weil es vor dem TYPO3-Container läuft.
+`Classes/Runtime/` is excluded from DI auto-registration because it runs before the TYPO3 container exists.
 
-**Environment-Variablen:**
+**Environment variables:**
 
-| Variable | Beschreibung | Default |
+| Variable | Description | Default |
 |---|---|---|
-| `TYPO3_BACKEND_ENTRYPOINT` | Backend-Entry-Point (Pfad oder URL) | `/typo3` |
-| `MAX_REQUESTS` | Requests pro Worker-Lifecycle | `1` |
-| `TYPO3_AUTOLOAD_PATH` | Pfad zu `vendor/autoload.php` | Auto-Detect |
+| `TYPO3_BACKEND_ENTRYPOINT` | Backend entry point (path or URL) | `/typo3` |
+| `MAX_REQUESTS` | Requests per worker lifecycle | `1` |
+| `TYPO3_AUTOLOAD_PATH` | Path to `vendor/autoload.php` | auto-detected |
 
 ### EarlyHintMiddleware
 
-Sammelt im PSR-15-Middleware-Hook nach `handler->handle()` die per `AssetCollector` registrierten CSS-/JS-Quellen, resolved EXT:-Pfade mit `PathUtility::getSystemResourceUri()` (TYPO3 v14+-konform) und sendet zwei parallele Hints:
+After `handler->handle()`, the PSR-15 middleware collects the CSS and JS sources registered with the `AssetCollector`, resolves EXT: paths with `PathUtility::getSystemResourceUri()` (TYPO3 v14+ compliant) and sends two hints in parallel:
 
-1. **103 Early Hints** via `headers_send(103)` — sobald FrankenPHP die Funktion bereitstellt (`function_exists()`-Guard für CLI/Test-Kontexte)
-2. **`Link:`-Header in der 200-Response** — Fallback und für HTTP/2-Push-fähige Reverse-Proxies
+1. **103 Early Hints** via `headers_send(103)` — as soon as FrankenPHP provides the function (`function_exists()` guard for CLI and test contexts)
+2. **`Link:` header in the 200 response** — as a fallback and for reverse proxies capable of HTTP/2 push
 
-Beide Mechanismen liefern Browser-deduplizierbare Preload-Hints. Bei CSS/JS-lastigen Seiten messbar bessere LCP-Werte.
+Both mechanisms deliver preload hints the browser can deduplicate. Pages heavy on CSS/JS get measurably better LCP.
 
-Middleware-Position: vor `typo3/cms-frontend/timetracker` (siehe `Configuration/RequestMiddlewares.php`).
+Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration/RequestMiddlewares.php`).
 
-### Cache-Invalidierung
+### Cache invalidation
 
-`CaddyCacheService` spricht die Souin-REST-API:
+`CaddyCacheService` talks to the Souin REST API:
 
-- **DELETE** `{proto}://{host}:{port}{apiEndpoint}` mit JSON-Body `{"url": "https://example.com/path"}` — URL-basiert
-- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` mit `Surrogate-Key`-Header — Tag-basiert
-- Wildcard-URLs — Site-weit
+- **DELETE** `{proto}://{host}:{port}{apiEndpoint}` with the JSON body `{"url": "https://example.com/path"}` — by URL
+- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` with a `Surrogate-Key` header — by tag
+- Wildcard URLs — site-wide
 
-Auto-Invalidierung über:
+Automatic invalidation via:
 
-- **PSR-14 `CacheFlushEvent`** — allgemeiner Cache-Flush
-- **DataHandler-Hook `processDatamap_afterDatabaseOperations`** — `pages`, `tt_content`, `sys_file`, `sys_file_reference`, `fe_users`, `fe_groups`
-- **PSR-14 `SystemInformationToolbarCollectorEvent`** — Backend-Toolbar-Integration
+- **PSR-14 `CacheFlushEvent`** — general cache flush
+- **DataHandler hook `processDatamap_afterDatabaseOperations`** — `pages`, `tt_content`, `sys_file`, `sys_file_reference`, `fe_users`, `fe_groups`
+- **PSR-14 `SystemInformationToolbarCollectorEvent`** — backend toolbar integration
 
-Optional API-Key via `X-API-Key`-Header.
+An optional API key is sent in the `X-API-Key` header.
 
 ## Installation
 
@@ -91,60 +91,60 @@ your-domain.com {
 }
 ```
 
-### Extension-Konfiguration
+### Extension configuration
 
-Im TYPO3-Backend unter „Admin Tools → Extension Configuration → frankenphp":
+In the TYPO3 backend under "Admin Tools → Extension Configuration → frankenphp":
 
-| Key | Beschreibung | Default |
+| Key | Description | Default |
 |---|---|---|
-| `enabled` | Invalidierungen überhaupt an den Proxy senden. `0` = kein PURGE, kein Admin-API-Aufruf (lokale Entwicklung ohne caddy-proxy) | `1` |
-| `caddyHost` | Caddy-Server-Host für Cache-API | `localhost` |
-| `caddyPort` | Caddy-Server-Port | `80` |
-| `caddyProtocol` | `http` oder `https` | `http` |
-| `caddyApiEndpoint` | Souin-API-Pfad | `/souin/api/souin` |
-| `caddyApiKey` | Optional, sendet `X-API-Key`-Header | — |
-| `enableDebugLogging` | Detail-Logs für Cache-Calls | `0` |
-| `httpTimeout` | HTTP-Timeout (Sekunden) | `5` |
-| `invalidateAllSites` | Cache-Flush invalidiert alle Sites | `1` |
-| `cacheTagHeader` | Header-Name für Tag-Invalidierung | `Surrogate-Key` |
+| `enabled` | Send invalidations to the proxy at all. `0` = no PURGE, no admin API call (local development without caddy-proxy) | `1` |
+| `caddyHost` | Caddy server host for the cache API | `localhost` |
+| `caddyPort` | Caddy server port | `80` |
+| `caddyProtocol` | `http` or `https` | `http` |
+| `caddyApiEndpoint` | Souin API path | `/souin/api/souin` |
+| `caddyApiKey` | Optional, sends the `X-API-Key` header | — |
+| `enableDebugLogging` | Detailed logs for cache calls | `0` |
+| `httpTimeout` | HTTP timeout (seconds) | `5` |
+| `invalidateAllSites` | A cache flush invalidates all sites | `1` |
+| `cacheTagHeader` | Header name for tag invalidation | `Surrogate-Key` |
 
-## Worker-Reload (ohne Container-Restart)
+## Worker reload (without a container restart)
 
-OPcache cached den Middleware-Code pro Worker-Thread. Nach Code-Änderungen reicht `typo3 cache:flush --group all` nicht. Worker recyclen:
+OPcache caches the middleware code per worker thread. After code changes, `typo3 cache:flush --group all` is not enough. Recycle the workers:
 
 ```bash
-# SIGUSR1 an FrankenPHP-PID 1
+# SIGUSR1 to FrankenPHP's PID 1
 docker exec <httpd-container> kill -USR1 1
 ```
 
-`frankenphp reload --config /etc/caddy/Caddyfile` lädt nur die Caddy-Config, nicht zwingend die PHP-Worker-Threads.
+`frankenphp reload --config /etc/caddy/Caddyfile` reloads only the Caddy config, not necessarily the PHP worker threads.
 
 ## Logging
 
-PSR-3-Logger via TYPO3:
+PSR-3 logger via TYPO3:
 
-- **Info** — normale Cache-Invalidierungs-Vorgänge
-- **Warning** — fehlgeschlagene API-Calls
-- **Error** — Exceptions während der Invalidierung
-- **Debug** — Request/Response-Details (nur mit `enableDebugLogging`)
+- **Info** — normal cache invalidations
+- **Warning** — failed API calls
+- **Error** — exceptions during invalidation
+- **Debug** — request/response details (only with `enableDebugLogging`)
 
-## Backend-Modul
+## Backend module
 
-„Admin Tools → Caddy Cache Management":
+"Admin Tools → Caddy Cache Management":
 
-- **Flush All Cache** — invalidiert alle konfigurierten Sites
-- **Flush Site Cache** — pro Site einzeln
-- **Cache Status** — Übersicht über die Auto-Invalidierung
+- **Flush All Cache** — invalidates all configured sites
+- **Flush Site Cache** — one site at a time
+- **Cache Status** — overview of the automatic invalidation
 
-## Erweiterung
+## Extending
 
-### Eigene Cache-Tags
+### Custom cache tags
 
 ```php
 $this->caddyCacheService->invalidateByTags(['custom:tag', 'product:123']);
 ```
 
-### Eigene Event-Listener
+### Custom event listeners
 
 ```yaml
 # Configuration/Services.yaml
@@ -158,13 +158,13 @@ services:
 
 ## Troubleshooting
 
-| Symptom | Wahrscheinlich |
+| Symptom | Likely cause |
 |---|---|
-| 103 sehe ich nicht im `curl -v` | Souin-Cache schluckt 103 bei Cache-Hits. `Cache-Control: no-cache` + Cache-Buster im URL. Außerdem zeigt curl <8.10 die 103 stillschweigend nicht. |
-| Browser-Console `Refused to apply style from 'https://host/EXT:...'` | Pre-v4.0.3 — EXT:-Resolution war nicht implementiert. Auf >= v4.0.6 updaten. |
-| Cache wird nicht invalidiert | Caddy-Host/Port/Protocol prüfen, `enableDebugLogging` aktivieren, Logs `/var/log/typo3` checken |
-| API-Calls schlagen mit 401 fehl | API-Key prüfen, `X-API-Key`-Header in der Caddy-Config zulassen |
+| I don't see the 103 in `curl -v` | The Souin cache swallows the 103 on cache hits. Use `Cache-Control: no-cache` plus a cache buster in the URL. Also, curl < 8.10 silently does not show the 103. |
+| Browser console `Refused to apply style from 'https://host/EXT:...'` | Before v4.0.3 — EXT: resolution was not implemented. Update to >= v4.0.6. |
+| The cache is not invalidated | Check the Caddy host/port/protocol, enable `enableDebugLogging`, check the logs in `/var/log/typo3` |
+| API calls fail with 401 | Check the API key, allow the `X-API-Key` header in the Caddy config |
 
-## Lizenz
+## License
 
 GPL-2.0-or-later
