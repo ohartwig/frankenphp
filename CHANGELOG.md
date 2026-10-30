@@ -3,6 +3,16 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.4.4](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.3...v5.4.4) (2026-10-30)
+
+### :white_check_mark: Tests
+
+* build the DI container in this repository's pipeline ([90f13f6](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/90f13f6238edea85e6868b6648f1825c1294a46c))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([150c635](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/150c635b81c557903fd36580864fc1ae99a06af4))
+
 ## [5.4.3](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.2...v5.4.3) (2026-10-18)
 
 ### :bug: Fixes
