@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Functional tests boot a real TYPO3 instance with this extension loaded.
+
+    That is the only place where Configuration/Services.yaml is executed at
+    all. A unit test builds a class by hand and brings every argument itself,
+    so it never asks whether the DI container can supply them. A container
+    that does not compile passes every unit test and first fails in a consuming
+    installation's release build.
+
+    The existence of this file arms test:phpunit:functional in the composed
+    pipeline; without it the job is not even created.
+
+    The bootstrap is referenced from the testing framework rather than copied:
+    a copy drifts on the next framework update and is code that static
+    analysis reads (ORIGINAL_ROOT only exists at runtime).
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/12.0/phpunit.xsd"
+         backupGlobals="true"
+         bootstrap="../vendor/typo3/testing-framework/Resources/Core/Build/FunctionalTestsBootstrap.php"
+         cacheDirectory=".phpunit.cache"
+         cacheResult="false"
+         colors="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         requireCoverageMetadata="false"
+>
+    <testsuites>
+        <testsuite name="Functional">
+            <directory>Functional</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">../Classes</directory>
+        </include>
+    </source>
+    <php>
+        <ini name="display_errors" value="1"/>
+        <env name="TYPO3_CONTEXT" value="Testing"/>
+    </php>
+</phpunit>
