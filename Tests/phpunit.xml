@@ -6,7 +6,7 @@
     without ever being executed. The pipeline was green and said nothing about
     it — the exact failure mode that component's own comments describe.
 
-    executionOrder is "depends,random" rather than "depends,defects" because
+    executionOrder is "random" (PHPUnit 13 no longer accepts "depends,random") rather than "defects" because
     Infection rewrites this file into a copy of its own with
     recordTestRunHistory="false" forced on; ordering by defects then raises a
     runner warning before the first test, and the forced stopOnDefect turns it
@@ -14,10 +14,10 @@
     for anyway.
 -->
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/12.0/phpunit.xsd"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/13.4/phpunit.xsd"
          bootstrap="../vendor/autoload.php"
          colors="true"
-         executionOrder="depends,random"
+         executionOrder="random"
          resolveDependencies="true"
          cacheDirectory=".phpunit.cache">
     <testsuites>
