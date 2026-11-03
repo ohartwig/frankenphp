@@ -158,6 +158,40 @@ final class CaddyCacheServiceTest extends TestCase
     }
 
     /**
+     * AUD-062-F01: a file has no page URL and no tag, so it is purged by its
+     * Souin key per site host. Souin reads the key as a regex, so the file name
+     * is quoted: an unquoted dot would also match `aXpdf`, and an unquoted
+     * `(` or `+` would make the key invalid or match something else.
+     */
+    #[Test]
+    public function aFileIsPurgedByItsQuotedSouinKeyOnEverySiteHost(): void
+    {
+        $this->service(
+            [],
+            $this->site('main', 'https://www.example.org/'),
+            $this->site('other', 'https://other.example.org/'),
+        )->invalidateFilePaths(['/fileadmin/docs/report (1)+final.pdf']);
+
+        self::assertCount(2, $this->sent);
+        self::assertSame('PURGE', $this->sent[0]->getMethod());
+        self::assertStringStartsWith('http://localhost:2019/souin-api/souin/', (string)$this->sent[0]->getUri());
+        self::assertSame(
+            'GET-www\.example\.org-\/fileadmin\/docs\/report \(1\)\+final\.pdf',
+            rawurldecode(substr($this->sent[0]->getUri()->getPath(), strlen('/souin-api/souin/'))),
+        );
+        self::assertStringContainsString('GET-other\.example\.org-', rawurldecode((string)$this->sent[1]->getUri()));
+    }
+
+    #[Test]
+    public function aFilePurgeSendsNothingWhenDisabled(): void
+    {
+        $this->service(['enabled' => '0'], $this->site('main', 'https://www.example.org/'))
+            ->invalidateFilePaths(['/fileadmin/a.pdf']);
+
+        self::assertSame([], $this->sent);
+    }
+
+    /**
      * `key { disable_scheme }` in the Caddyfile means the stored key carries no
      * scheme. A key built with one matches nothing, and the purge is a no-op
      * that reports success.

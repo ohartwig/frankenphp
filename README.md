@@ -12,6 +12,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 - **103 Early Hints** — real RFC 8297 responses via `headers_send(103)` from the AssetCollector. CSS/JS preloads start in parallel with server-side rendering.
 - **Caddy/Souin cache invalidation** — based on the REST API via PURGE/DELETE. Three strategies: by URL, by tag (Surrogate-Key), wildcard.
 - **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
+  Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. Tag purges only take effect where something emits `Surrogate-Key`; this extension does not.
 - **Backend module** — Admin Tools → manual flushes and cache-key inspection.
 
 ## Components

@@ -170,6 +170,39 @@ class CaddyCacheService
         $this->sendPurgeToProxy($proxyUrl, $tags);
     }
 
+    /**
+     * Purge the public paths of fileadmin files (and their processed variants) on every
+     * site host. Files cannot be purged by tag -- nothing emits Surrogate-Key -- so each
+     * path is purged by its Souin key "GET-<host>-<path>". Souin evaluates the key as a
+     * regex, hence the quoting: a file name is a literal, not a pattern.
+     *
+     * @param list<string> $paths Absolute public paths, e.g. "/fileadmin/a/b.pdf"
+     */
+    public function invalidateFilePaths(array $paths): void
+    {
+        $hosts = [];
+        foreach ($this->siteFinder->getAllSites() as $site) {
+            $bases = [$site->getBase()];
+            foreach ($site->getAllLanguages() as $language) {
+                $bases[] = $language->getBase();
+            }
+            foreach ($bases as $base) {
+                $host = $base->getHost();
+                if ($host !== '') {
+                    $hosts[$host] = true;
+                }
+            }
+        }
+
+        $target = rtrim($this->buildApiUrl(), '/');
+        foreach (array_keys($hosts) as $host) {
+            foreach (array_unique($paths) as $path) {
+                $key = 'GET-' . preg_quote($host, '/') . '-' . preg_quote($path, '/');
+                $this->purgeViaApi($target . '/' . $key, [], $path);
+            }
+        }
+    }
+
     public function invalidateAllSites(): void
     {
         if (!$this->invalidateAllSites) {
