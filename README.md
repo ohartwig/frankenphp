@@ -51,7 +51,7 @@ Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration
 `CaddyCacheService` talks to the Souin REST API:
 
 - **DELETE** `{proto}://{host}:{port}{apiEndpoint}` with the JSON body `{"url": "https://example.com/path"}` — by URL
-- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` with a `Surrogate-Key` header (tags separated by `, `, as Souin splits them) — by tag. Souin answers 204 to every purge, matching or not; anything else is logged as a failure
+- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` with a `Surrogate-Key` header (tags separated by comma and space, as Souin splits them) — by tag. Souin answers 204 to every purge, matching or not; anything else is logged as a failure
 - Wildcard URLs — site-wide
 
 Automatic invalidation via:
