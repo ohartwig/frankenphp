@@ -3,6 +3,17 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.4.5](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.4...v5.4.5) (2026-11-03)
+
+### :bug: Fixes
+
+* **security:** AUD-062 F01 — drop redundant empty-string check (phpstan) ([bbd75b9](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/bbd75b9e5e4fb89c7d5c1c4882d1976f2c0fce7f))
+* **security:** AUD-062 F01 — purge deleted/replaced/renamed/moved fileadmin files from the edge ([2a4939c](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/2a4939cb0949b515dc3505a2ab96aa08786df3d2))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([039b3e0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/039b3e0778a67c5db51bd385543b143bf7971fee))
+
 ## [5.4.4](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.3...v5.4.4) (2026-10-30)
 
 ### :white_check_mark: Tests
