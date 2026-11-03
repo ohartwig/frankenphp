@@ -113,7 +113,7 @@ final class FileCacheInvalidationListener
 
         $paths = [];
         foreach ($urls as $url) {
-            if ($url === null || $url === '') {
+            if ($url === null) {
                 continue;
             }
             $path = parse_url($url, PHP_URL_PATH);
