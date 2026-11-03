@@ -255,7 +255,7 @@ class CacheInvalidationListener
     {
         // This could be extended to walk up the page tree and invalidate
         // parent pages that might show this page in their navigation
-        $this->caddyCacheService->invalidateByTags(['navigation', 'page:' . $pageId]);
+        $this->caddyCacheService->invalidateByTags(['navigation', 'pageId_' . $pageId]);
     }
 
     /**

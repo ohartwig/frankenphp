@@ -89,13 +89,38 @@ class CacheManagementController extends ActionController
 
         try {
             $site = $this->siteFinder->getSiteByIdentifier($siteIdentifier);
-            $this->caddyCacheService->invalidateSite($site);
+            $result = $this->caddyCacheService->flushSite($site);
 
-            $this->addFlashMessage(
-                sprintf('Caddy cache has been successfully flushed for site "%s".', $site->getIdentifier()),
-                'Cache Flushed',
-                ContextualFeedbackSeverity::OK
-            );
+            if ($result->isComplete()) {
+                $this->addFlashMessage(
+                    sprintf('Caddy cache has been flushed for site "%s".', $site->getIdentifier()),
+                    'Cache Flushed',
+                    ContextualFeedbackSeverity::OK
+                );
+            } elseif ($result->disabled) {
+                $this->addFlashMessage(
+                    'The Caddy cache integration is disabled; nothing was flushed.',
+                    'Cache Not Flushed',
+                    ContextualFeedbackSeverity::WARNING
+                );
+            } elseif ($result->failed) {
+                $this->addFlashMessage(
+                    sprintf('The Caddy cache for site "%s" could not be flushed; see the log.', $site->getIdentifier()),
+                    'Cache Flush Error',
+                    ContextualFeedbackSeverity::ERROR
+                );
+            } else {
+                $this->addFlashMessage(
+                    sprintf(
+                        'Nothing was flushed for site "%s": no Surrogate-Key emitted for %s. '
+                        . 'Pages cached before the key was emitted are not reachable by tag; use "Flush all".',
+                        $site->getIdentifier(),
+                        implode(', ', $result->unmatched),
+                    ),
+                    'Nothing To Flush',
+                    ContextualFeedbackSeverity::WARNING
+                );
+            }
         } catch (\Exception $e) {
             $this->addFlashMessage(
                 'Failed to flush Caddy cache for site: ' . $e->getMessage(),

@@ -12,7 +12,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 - **103 Early Hints** — real RFC 8297 responses via `headers_send(103)` from the AssetCollector. CSS/JS preloads start in parallel with server-side rendering.
 - **Caddy/Souin cache invalidation** — based on the REST API via PURGE/DELETE. Three strategies: by URL, by tag (Surrogate-Key), wildcard.
 - **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
-  Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. Tag purges only take effect where something emits `Surrogate-Key`; this extension does not.
+  Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. The extension emits `Surrogate-Key` (site identifier and `pageId_<n>`) on every rendered frontend page through `SurrogateKeyMiddleware`, so tag purges have entries to find; files are served by the web server and carry no key. A tag purge only sends the tags Souin actually holds and logs `no Surrogate-Key emitted for tag` for the rest; "Flush site" in the backend module reports that instead of success. Pages cached before the key was emitted are not reachable by tag until they expire or are flushed completely.
 - **Backend module** — Admin Tools → manual flushes and cache-key inspection.
 
 ## Components
@@ -51,7 +51,7 @@ Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration
 `CaddyCacheService` talks to the Souin REST API:
 
 - **DELETE** `{proto}://{host}:{port}{apiEndpoint}` with the JSON body `{"url": "https://example.com/path"}` — by URL
-- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` with a `Surrogate-Key` header — by tag
+- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` with a `Surrogate-Key` header (tags separated by `, `, as Souin splits them) — by tag. Souin answers 204 to every purge, matching or not; anything else is logged as a failure
 - Wildcard URLs — site-wide
 
 Automatic invalidation via:

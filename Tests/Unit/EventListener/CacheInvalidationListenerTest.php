@@ -270,7 +270,7 @@ final class CacheInvalidationListenerTest extends TestCase
             $this->save('pages', 42, [$field => 'x']);
 
             self::assertContains('invalidateByTags', $this->methods(), $field);
-            self::assertSame(['navigation', 'page:42'], $this->calls[2]['argument'], $field);
+            self::assertSame(['navigation', 'pageId_42'], $this->calls[2]['argument'], $field);
         }
     }
 
