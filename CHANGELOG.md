@@ -3,6 +3,24 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.4.6](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.5...v5.4.6) (2026-11-04)
+
+### :bug: Fixes
+
+* **security:** AUD-062 F01 — Surrogate-Key tags and honest flush results ([8449b6b](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/8449b6b97984b0bd4aadca9ad3eadace393e18f2))
+
+### :memo: Documentation
+
+* **readme:** avoid a space-only code span (MD038) ([4f4e1e8](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/4f4e1e89b282eb5d06cbf714dcd17e4e16fd12a5))
+
+### :white_check_mark: Tests
+
+* accept PHPUnit 13 executionOrder so test:infection runs ([583be97](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/583be97466d61016427417c32e35474025fe39e1))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([f0790f2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/f0790f2daf82e495f274bff62f0862ace68341be))
+
 ## [5.4.5](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.4...v5.4.5) (2026-11-03)
 
 ### :bug: Fixes
