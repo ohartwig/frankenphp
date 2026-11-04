@@ -3,6 +3,20 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.4.7](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.6...v5.4.7) (2026-11-04)
+
+### :bug: Fixes
+
+* **worker:** reset request state between requests ([03e470b](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/03e470b7e294e8717a05704273a07995443b83cd))
+
+### :white_check_mark: Tests
+
+* **worker:** pin each reset and simplify handler restore ([4147894](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/4147894716d04d2728ead6e14ad1b9246d425a0e))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([d767ebc](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/d767ebc1b7a8ff1f92e867630b5a6d32686cbd43))
+
 ## [5.4.6](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.5...v5.4.6) (2026-11-04)
 
 ### :bug: Fixes
