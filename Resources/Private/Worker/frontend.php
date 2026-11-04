@@ -10,7 +10,7 @@ declare(strict_types=1);
  *
  * Environment variables:
  *   TYPO3_BACKEND_ENTRYPOINT  Backend entry point path or URL (default: /typo3)
- *   MAX_REQUESTS              Requests per worker lifecycle    (default: 1)
+ *   MAX_REQUESTS              Requests per worker lifecycle    (default: 500)
  *   TYPO3_AUTOLOAD_PATH       Path to vendor/autoload.php     (auto-detected)
  */
 
@@ -36,7 +36,7 @@ $backendEntryPoint = $_ENV['TYPO3_BACKEND_ENTRYPOINT']
     ?? $_SERVER['TYPO3_BACKEND_ENTRYPOINT']
     ?? '/typo3';
 
-$maxRequests = (int) ($_ENV['MAX_REQUESTS'] ?? 1);
+$maxRequests = (int) ($_ENV['MAX_REQUESTS'] ?? 500);
 
 $classifier = new RequestClassifier($backendEntryPoint);
 $worker = new FrontendWorker($classifier, $autoloadPath);

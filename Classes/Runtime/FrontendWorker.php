@@ -7,7 +7,9 @@ namespace Koh\FrankenPHP\Runtime;
 /**
  * FrankenPHP worker loop for TYPO3 frontend requests.
  *
- * Bootstraps TYPO3 per request — no state is shared between requests.
+ * Bootstraps TYPO3 per request. A fresh bootstrap does not clear what the
+ * previous request left in static properties and globals, so the loop resets
+ * that state before and after every request (see RequestStateReset).
  * Backend and Install requests are rejected with HTTP 503.
  */
 final readonly class FrontendWorker
@@ -24,8 +26,15 @@ final readonly class FrontendWorker
         $nbRequests = 0;
         $running = true;
 
+        $handlers = RequestStateReset::currentHandlers();
+
         while ($nbRequests < $maxRequests && $running) {
             $running = \frankenphp_handle_request($this->handleRequest(...));
+            // After the request as well as before the next one: an idle worker
+            // should not hold a database connection or the last page's objects
+            // until traffic arrives again.
+            RequestStateReset::reset();
+            RequestStateReset::restoreHandlers($handlers);
             gc_collect_cycles();
             ++$nbRequests;
         }
@@ -33,6 +42,8 @@ final readonly class FrontendWorker
 
     private function handleRequest(): void
     {
+        RequestStateReset::reset();
+
         if (!$this->classifier->isFrontendRequest()) {
             http_response_code(503);
             header('Content-Type: text/plain; charset=utf-8');

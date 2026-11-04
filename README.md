@@ -8,7 +8,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 
 ## Features
 
-- **FrankenPHP frontend worker** — request classification separates frontend requests (worker mode) from the backend and the Install Tool. The worker bootstraps TYPO3 per request; no state is shared.
+- **FrankenPHP frontend worker** — request classification separates frontend requests (worker mode) from the backend and the Install Tool. The worker bootstraps TYPO3 per request and resets the state a request leaves in static properties and globals before the next one (`RequestStateReset`).
 - **103 Early Hints** — real RFC 8297 responses via `headers_send(103)` from the AssetCollector. CSS/JS preloads start in parallel with server-side rendering.
 - **Caddy/Souin cache invalidation** — based on the REST API via PURGE/DELETE. Three strategies: by URL, by tag (Surrogate-Key), wildcard.
 - **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
@@ -22,8 +22,9 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | Class | Responsibility |
 |---|---|
 | `Classes/Runtime/FrontendWorker` | Worker loop with `frankenphp_handle_request()`, a fresh TYPO3 bootstrap per request with `REQUESTTYPE_FE` |
+| `Classes/Runtime/RequestStateReset` | Clears what survives a bootstrap in a long-lived process: the `getIndpEnv()` cache (host and URL of the previous request), singletons, the database connections, `BE_USER`/`LANG`/`TYPO3_REQUEST`, and the error and exception handlers each bootstrap registers |
 | `Classes/Runtime/RequestClassifier` | Pure PHP (no TYPO3 dependencies), classifies requests from `$_SERVER` as frontend/backend/install. Backend detection by path OR by host |
-| `Resources/Private/Worker/frontend.php` | Worker entry point (register it as `worker` in the Caddyfile) |
+| `Resources/Private/Worker/frontend.php` | Worker entry point (register it as `worker` with `match` in the frontend `php` block, see below) |
 
 `Classes/Runtime/` is excluded from DI auto-registration because it runs before the TYPO3 container exists.
 
@@ -32,7 +33,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | Variable | Description | Default |
 |---|---|---|
 | `TYPO3_BACKEND_ENTRYPOINT` | Backend entry point (path or URL) | `/typo3` |
-| `MAX_REQUESTS` | Requests per worker lifecycle | `1` |
+| `MAX_REQUESTS` | Requests per worker lifecycle | `500` |
 | `TYPO3_AUTOLOAD_PATH` | Path to `vendor/autoload.php` | auto-detected |
 
 ### EarlyHintMiddleware
@@ -70,16 +71,37 @@ composer require koh/frankenphp
 
 ### Caddyfile
 
+A worker only receives a request when FrankenPHP routes it there. A global
+`worker` in the `frankenphp` block is matched by script path: it serves a
+request only if the resolved script *is* the worker file. TYPO3 rewrites every
+frontend request to `/index.php`, so a global worker next to that rewrite sits
+idle and every request runs in a regular thread. Declare the worker inside the
+frontend `php` block and bind it with `match` instead; the worker file may live
+outside the public directory.
+
 ```caddyfile
 your-domain.com {
     root * /app/public
-    
-    php_server {
-        worker /app/vendor/koh/frankenphp/Resources/Private/Worker/frontend.php
-        env TYPO3_BACKEND_ENTRYPOINT /typo3
-        env MAX_REQUESTS 1000
+
+    # Backend and Install Tool: regular threads, no worker.
+    @backend path /typo3 /typo3/*
+    handle @backend {
+        php
     }
-    
+
+    handle {
+        rewrite * /index.php
+        php {
+            worker {
+                file /app/vendor/koh/frankenphp/Resources/Private/Worker/frontend.php
+                match *
+                num 4
+                env TYPO3_BACKEND_ENTRYPOINT /typo3
+                env MAX_REQUESTS 500
+            }
+        }
+    }
+
     route {
         cache {
             api {
@@ -91,6 +113,15 @@ your-domain.com {
     }
 }
 ```
+
+Leave room for regular threads: with `num_threads` unset, FrankenPHP starts
+twice as many threads as there are CPUs, and when the workers take all of them
+it adds exactly one — on a 2-CPU pod with 4 workers, a single regular thread
+then serves every backend request. Set `num_threads` in the global `frankenphp` block to the worker count
+plus what the backend needs.
+
+`frankenphp_worker_request_count` shows whether the worker is reached at all;
+the series does not exist until it has served its first request.
 
 ### Extension configuration
 

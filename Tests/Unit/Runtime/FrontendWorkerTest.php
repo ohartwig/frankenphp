@@ -6,6 +6,7 @@ namespace Koh\FrankenPHP\Tests\Unit\Runtime;
 
 use Koh\FrankenPHP\Runtime\FrontendWorker;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
+use Koh\FrankenPHP\Runtime\RequestStateReset;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -126,6 +127,34 @@ final class FrontendWorkerTest extends TestCase
 
         self::assertSame('Internal Server Error', $output);
         self::assertStringNotContainsString('bootstrap unavailable', $output);
+    }
+
+    /**
+     * What a request leaves in globals is gone once the worker is back in the
+     * loop, so the next request on this thread cannot pick it up.
+     */
+    #[Test]
+    public function requestStateDoesNotOutliveTheRequest(): void
+    {
+        $GLOBALS['BE_USER'] = new \stdClass();
+
+        $this->runCapturing($this->worker('/a-page'));
+
+        self::assertArrayNotHasKey('BE_USER', $GLOBALS);
+    }
+
+    /**
+     * Handlers registered while serving a request are removed afterwards; the
+     * ones in place before the loop started stay.
+     */
+    #[Test]
+    public function theLoopLeavesTheHandlerStackAsItFoundIt(): void
+    {
+        $before = RequestStateReset::currentHandlers();
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/HandlerRegisteringAutoload.php'));
+
+        self::assertSame($before, RequestStateReset::currentHandlers());
     }
 
     #[Test]
