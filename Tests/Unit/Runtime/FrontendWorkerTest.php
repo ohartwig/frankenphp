@@ -6,10 +6,12 @@ namespace Koh\FrankenPHP\Tests\Unit\Runtime;
 
 use Koh\FrankenPHP\Runtime\FrontendWorker;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
+use Koh\FrankenPHP\Runtime\RequestStateReset;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
 use Koh\FrankenPHP\Tests\Fixtures\FrankenPhpWorkerApiSpy;
+use Koh\FrankenPHP\Tests\Fixtures\RequestStateProbe;
 
 require_once __DIR__ . '/../../Fixtures/frankenphp_handle_request.php';
 
@@ -126,6 +128,65 @@ final class FrontendWorkerTest extends TestCase
 
         self::assertSame('Internal Server Error', $output);
         self::assertStringNotContainsString('bootstrap unavailable', $output);
+    }
+
+    /**
+     * A request starts clean even when something left state behind before it —
+     * the reset at the start of a request, not only the one after the last.
+     */
+    #[Test]
+    public function aRequestDoesNotStartWithStateLeftBehind(): void
+    {
+        RequestStateProbe::reset();
+        $GLOBALS['BE_USER'] = new \stdClass();
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/StateProbingAutoload.php'));
+
+        self::assertSame([false], RequestStateProbe::$backendUserAtStart);
+    }
+
+    /**
+     * What a request leaves in globals is gone once the worker is back in the
+     * loop, so an idle worker holds nothing of it and the next request on this
+     * thread cannot pick it up.
+     */
+    #[Test]
+    public function requestStateDoesNotOutliveTheRequest(): void
+    {
+        RequestStateProbe::reset();
+        unset($GLOBALS['BE_USER']);
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/StateProbingAutoload.php'));
+
+        self::assertArrayNotHasKey('BE_USER', $GLOBALS);
+    }
+
+    /**
+     * Over several requests none of them sees what the previous one left.
+     */
+    #[Test]
+    public function noRequestSeesThePreviousOnesState(): void
+    {
+        RequestStateProbe::reset();
+        FrankenPhpWorkerApiSpy::reset(3);
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/StateProbingAutoload.php'), 3);
+
+        self::assertSame([false, false, false], RequestStateProbe::$backendUserAtStart);
+    }
+
+    /**
+     * Handlers registered while serving a request are removed afterwards; the
+     * ones in place before the loop started stay.
+     */
+    #[Test]
+    public function theLoopLeavesTheHandlerStackAsItFoundIt(): void
+    {
+        $before = RequestStateReset::currentHandlers();
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/HandlerRegisteringAutoload.php'));
+
+        self::assertSame($before, RequestStateReset::currentHandlers());
     }
 
     #[Test]
