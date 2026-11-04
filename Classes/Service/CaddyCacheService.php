@@ -161,13 +161,69 @@ class CaddyCacheService
      */
     public function invalidateByTags(array $tags): void
     {
-        $sites = $this->siteFinder->getAllSites();
-        $firstSite = reset($sites);
-        if ($firstSite === false) {
-            return;
+        $this->purgeTags($tags);
+    }
+
+    /**
+     * Purge by Surrogate-Key and say what happened. Souin answers 204 to every PURGE,
+     * matching or not, so a tag is only purged when Souin lists it as a key it holds;
+     * every other tag is logged as "no Surrogate-Key emitted" and reported unmatched.
+     *
+     * @param list<string> $tags
+     */
+    public function purgeTags(array $tags): PurgeResult
+    {
+        if (!$this->enabled) {
+            return PurgeResult::disabled();
         }
-        $proxyUrl = rtrim((string)$firstSite->getBase(), '/') . '/';
-        $this->sendPurgeToProxy($proxyUrl, $tags);
+        $sites = $this->siteFinder->getAllSites();
+        if (reset($sites) === false || $tags === []) {
+            return PurgeResult::done([], []);
+        }
+
+        $known = $this->fetchSurrogateTags();
+        if ($known === null) {
+            return PurgeResult::failed($tags);
+        }
+
+        $purgeable = [];
+        $unmatched = [];
+        foreach ($tags as $tag) {
+            if (in_array($tag, $known, true)) {
+                $purgeable[] = $tag;
+                continue;
+            }
+            $unmatched[] = $tag;
+            $this->logger->warning('Caddy Cache: no Surrogate-Key emitted for tag', ['tag' => $tag]);
+        }
+
+        if ($purgeable === []) {
+            return PurgeResult::done([], $unmatched);
+        }
+        if (!$this->purgeViaApi(rtrim($this->buildApiUrl(), '/'), $purgeable, implode(', ', $purgeable))) {
+            return PurgeResult::failed($tags);
+        }
+
+        return PurgeResult::done($purgeable, $unmatched);
+    }
+
+    /**
+     * Tags Souin holds entries for, without its "SURROGATE_" storage prefix.
+     * Null when the admin API could not be read at all.
+     *
+     * @return list<string>|null
+     */
+    private function fetchSurrogateTags(): ?array
+    {
+        $keys = $this->fetchFromAdminApi('/surrogate_keys', true);
+        if ($keys === null) {
+            return null;
+        }
+
+        return array_values(array_unique(array_map(
+            static fn(string $key): string => str_starts_with($key, 'SURROGATE_') ? substr($key, 10) : $key,
+            $keys,
+        )));
     }
 
     /**
@@ -224,7 +280,16 @@ class CaddyCacheService
 
     public function invalidateSite(Site $site): void
     {
-        $this->invalidateByTags([$site->getIdentifier()]);
+        $this->flushSite($site);
+    }
+
+    /**
+     * Purge everything cached under the site's identifier tag (emitted by
+     * SurrogateKeyMiddleware) and report whether anything was there to purge.
+     */
+    public function flushSite(Site $site): PurgeResult
+    {
+        return $this->purgeTags([$site->getIdentifier()]);
     }
 
     /**
@@ -317,10 +382,10 @@ class CaddyCacheService
     /**
      * @param list<string> $tags
      */
-    private function purgeViaApi(string $target, array $tags, string $ref): void
+    private function purgeViaApi(string $target, array $tags, string $ref): bool
     {
         if (!$this->enabled) {
-            return;
+            return false;
         }
 
         try {
@@ -333,24 +398,27 @@ class CaddyCacheService
             if ($tags !== []) {
                 $request = $request->withHeader(
                     $this->cacheTagsHeader,
-                    implode(' ', $tags),
+                    implode(', ', $tags),
                 );
             }
 
             $response = $this->httpClient->sendRequest($request);
 
+            // Souin's PURGE answers 204 No Content and nothing else. A 200 or 2xx with a
+            // body is something else answering (a proxy, an upstream page), not a purge.
+            //
             // An answer is not an acknowledgement. A wrong API key (401), a
             // proxy in the way (405) or a Souin without the API (404) all come
             // back as responses, not exceptions -- and were logged nowhere
             // outside debug mode, so the page stayed stale with no trace.
             $status = $response->getStatusCode();
-            if ($status < 200 || $status >= 300) {
+            if ($status !== 204) {
                 $this->logger->error('Caddy Cache: PURGE failed', [
                     'target' => $target,
                     'ref' => $ref,
                     'statusCode' => $status,
                 ]);
-                return;
+                return false;
             }
 
             if ($this->enableDebugLogging) {
@@ -358,25 +426,29 @@ class CaddyCacheService
                     'target' => $target,
                     'ref' => $ref,
                     'tags' => $tags,
-                    'statusCode' => $response->getStatusCode(),
+                    'statusCode' => $status,
                 ]);
             }
+
+            return true;
         } catch (\Exception $e) {
             $this->logger->error('Caddy Cache: PURGE failed', [
                 'target' => $target,
                 'ref' => $ref,
                 'error' => $e->getMessage(),
             ]);
+
+            return false;
         }
     }
 
     /**
-     * @return list<string>
+     * @return ($nullOnFailure is true ? list<string>|null : list<string>)
      */
-    private function fetchFromAdminApi(string $path): array
+    private function fetchFromAdminApi(string $path, bool $nullOnFailure = false): ?array
     {
         if (!$this->enabled) {
-            return [];
+            return $nullOnFailure ? null : [];
         }
 
         $apiUrl = $this->buildApiUrl() . $path;
@@ -396,7 +468,7 @@ class CaddyCacheService
 
             if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
                 $decoded = json_decode($body, true);
-                return is_array($decoded) ? $this->normalizeSouinKeys($decoded) : [];
+                return is_array($decoded) ? $this->normalizeSouinKeys($decoded) : ($nullOnFailure ? null : []);
             }
         } catch (\Exception $e) {
             $this->logger->error('Caddy Cache: Admin API unavailable', [
@@ -405,7 +477,7 @@ class CaddyCacheService
             ]);
         }
 
-        return [];
+        return $nullOnFailure ? null : [];
     }
 
     /**

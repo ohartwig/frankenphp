@@ -56,6 +56,9 @@ final class CaddyCacheServiceTest extends TestCase
 
     private ResponseInterface $response;
 
+    /** Answer to GETs (the admin API's key lists); falls back to $response. */
+    private ?ResponseInterface $listResponse = null;
+
     private AbstractLogger $logger;
 
     protected function setUp(): void
@@ -82,6 +85,10 @@ final class CaddyCacheServiceTest extends TestCase
                 $this->sent[] = $request;
                 if ($this->transportError !== null) {
                     throw $this->transportError;
+                }
+
+                if ($request->getMethod() === 'GET' && $this->listResponse !== null) {
+                    return $this->listResponse;
                 }
 
                 return $this->response;
@@ -249,23 +256,92 @@ final class CaddyCacheServiceTest extends TestCase
      * key with tags would purge one page instead of a whole tag set.
      */
     #[Test]
-    public function aTagPurgeSendsTheTagsInTheSurrogateKeyHeader(): void
+    public function aTagPurgeSendsTheKnownTagsInTheSurrogateKeyHeaderSeparatedByCommaSpace(): void
     {
-        $this->service([], $this->site('main', 'https://www.example.org/'))
-            ->invalidateByTags(['pageId_42', 'tt_content_7']);
+        // Souin splits the header on ", ". A space alone made "a b" one unknown tag.
+        $this->listResponse = $this->jsonResponse('{"SURROGATE_pageId_42":",k1","SURROGATE_tt_content_7":",k2"}');
+        $this->response = (new Response())->withStatus(204);
 
-        $request = $this->only();
-        self::assertSame('pageId_42 tt_content_7', $request->getHeaderLine('Surrogate-Key'));
+        $result = $this->service([], $this->site('main', 'https://www.example.org/'))
+            ->purgeTags(['pageId_42', 'tt_content_7']);
+
+        self::assertCount(2, $this->sent);
+        self::assertSame('GET', $this->sent[0]->getMethod());
+        $request = $this->sent[1];
+        self::assertSame('PURGE', $request->getMethod());
+        self::assertSame('pageId_42, tt_content_7', $request->getHeaderLine('Surrogate-Key'));
         self::assertStringNotContainsString('GET-', (string)$request->getUri());
+        self::assertTrue($result->isComplete());
+    }
+
+    /**
+     * AUD-062 F01 step 2: Souin answers 204 to a tag nothing was stored under. That
+     * used to read as a purge; now the tag is reported as never emitted.
+     */
+    #[Test]
+    public function aTagNothingEmittedIsReportedNotPurged(): void
+    {
+        $this->listResponse = $this->jsonResponse('{}');
+        $this->response = (new Response())->withStatus(204);
+
+        $result = $this->service([], $this->site('main', 'https://www.example.org/'))
+            ->purgeTags(['file:5']);
+
+        self::assertCount(1, $this->sent);
+        self::assertSame('GET', $this->sent[0]->getMethod());
+        self::assertSame(['file:5'], $result->unmatched);
+        self::assertFalse($result->isComplete());
+        self::assertSame(LogLevel::WARNING, $this->logger->records[0]['level']);
+        self::assertStringContainsString('no Surrogate-Key emitted', $this->logger->records[0]['message']);
+        self::assertSame('file:5', $this->logger->records[0]['context']['tag']);
+    }
+
+    #[Test]
+    public function onlyTheKnownTagsOfAMixedPurgeAreSent(): void
+    {
+        $this->listResponse = $this->jsonResponse('{"SURROGATE_pageId_1":",k"}');
+        $this->response = (new Response())->withStatus(204);
+
+        $result = $this->service([], $this->site('main', 'https://www.example.org/'))
+            ->purgeTags(['pageId_1', 'navigation']);
+
+        self::assertSame('pageId_1', $this->sent[1]->getHeaderLine('Surrogate-Key'));
+        self::assertSame(['pageId_1'], $result->purged);
+        self::assertSame(['navigation'], $result->unmatched);
+    }
+
+    #[Test]
+    public function anUnreadableKeyListFailsTheTagPurgeInsteadOfClaimingSuccess(): void
+    {
+        $this->listResponse = (new Response())->withStatus(401);
+
+        $result = $this->service([], $this->site('main', 'https://www.example.org/'))
+            ->purgeTags(['main']);
+
+        self::assertTrue($result->failed);
+        self::assertCount(1, $this->sent);
+    }
+
+    #[Test]
+    public function aDisabledServiceReportsDisabledForATagPurge(): void
+    {
+        $result = $this->service(['enabled' => '0'], $this->site('main', 'https://www.example.org/'))
+            ->purgeTags(['main']);
+
+        self::assertTrue($result->disabled);
+        self::assertSame([], $this->sent);
     }
 
     #[Test]
     public function theTagHeaderNameIsConfigurable(): void
     {
+        $this->listResponse = $this->jsonResponse('{"SURROGATE_a":",k"}');
+        $this->response = (new Response())->withStatus(204);
+
         $this->service(['cacheTagsHeader' => 'Cache-Tag'], $this->site('main', 'https://www.example.org/'))
             ->invalidateByTags(['a']);
 
-        self::assertSame('a', $this->only()->getHeaderLine('Cache-Tag'));
+        self::assertSame('a', $this->sent[1]->getHeaderLine('Cache-Tag'));
     }
 
     /**
@@ -283,11 +359,63 @@ final class CaddyCacheServiceTest extends TestCase
     #[Test]
     public function invalidatingASitePurgesItsIdentifierAsATag(): void
     {
+        $this->listResponse = $this->jsonResponse('{"SURROGATE_main":",k"}');
+        $this->response = (new Response())->withStatus(204);
         $site = $this->site('main', 'https://www.example.org/');
 
-        $this->service([], $site)->invalidateSite($site);
+        $result = $this->service([], $site)->flushSite($site);
 
-        self::assertSame('main', $this->only()->getHeaderLine('Surrogate-Key'));
+        self::assertSame('main', $this->sent[1]->getHeaderLine('Surrogate-Key'));
+        self::assertTrue($result->isComplete());
+    }
+
+    /**
+     * The "flush site" reproduction: nothing emits Surrogate-Key, Souin holds no
+     * entry under the site tag and answers the PURGE with 204 anyway. The result must not be success.
+     */
+    #[Test]
+    public function flushingASiteWhoseTagWasNeverEmittedIsNotSuccess(): void
+    {
+        $this->listResponse = $this->jsonResponse('[]');
+        $this->response = (new Response())->withStatus(204);
+        $site = $this->site('main', 'https://www.example.org/');
+
+        $result = $this->service([], $site)->flushSite($site);
+
+        self::assertFalse($result->isComplete());
+        self::assertSame(['main'], $result->unmatched);
+        self::assertSame([], array_filter($this->sent, static fn($r) => $r->getMethod() === 'PURGE'));
+    }
+
+    #[Test]
+    public function flushingASiteAnsweredWithAnErrorIsAFailure(): void
+    {
+        $this->listResponse = $this->jsonResponse('{"SURROGATE_main":",k"}');
+        $this->response = (new Response())->withStatus(403);
+        $site = $this->site('main', 'https://www.example.org/');
+
+        $result = $this->service([], $site)->flushSite($site);
+
+        self::assertTrue($result->failed);
+        self::assertFalse($result->isComplete());
+    }
+
+    /**
+     * Souin's PURGE answers 204. A 200 is something else replying -- a proxy
+     * page -- and is no proof that anything was purged.
+     */
+    #[Test]
+    public function aPurgeAnsweredWith200IsNotAcceptedAsASuccess(): void
+    {
+        $this->listResponse = $this->jsonResponse('{"SURROGATE_main":",k"}');
+        $this->response = $this->jsonResponse('<html>ok</html>', 200);
+        $site = $this->site('main', 'https://www.example.org/');
+
+        $result = $this->service([], $site)->flushSite($site);
+
+        self::assertTrue($result->failed);
+        self::assertSame(LogLevel::ERROR, $this->logger->records[0]['level']);
+        self::assertSame(200, $this->logger->records[0]['context']['statusCode']);
     }
 
     // --- flush all ----------------------------------------------------------

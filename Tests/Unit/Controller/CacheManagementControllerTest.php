@@ -6,6 +6,7 @@ namespace Koh\FrankenPHP\Tests\Unit\Controller;
 
 use Koh\FrankenPHP\Controller\CacheManagementController;
 use Koh\FrankenPHP\Service\CaddyCacheService;
+use Koh\FrankenPHP\Service\PurgeResult;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -54,6 +55,8 @@ final class CacheManagementControllerTest extends TestCase
 
     private bool $siteExists = true;
 
+    private ?PurgeResult $siteResult = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -84,11 +87,13 @@ final class CacheManagementControllerTest extends TestCase
             }
             $this->invalidated[] = '*';
         });
-        $service->method('invalidateSite')->willReturnCallback(function (Site $site): void {
+        $service->method('flushSite')->willReturnCallback(function (Site $site): PurgeResult {
             if ($this->failure !== null) {
                 throw $this->failure;
             }
             $this->invalidated[] = $site->getIdentifier();
+
+            return $this->siteResult ?? PurgeResult::done([$site->getIdentifier()], []);
         });
 
         $siteFinder = $this->createStub(SiteFinder::class);
@@ -253,5 +258,43 @@ final class CacheManagementControllerTest extends TestCase
         $this->controller('main')->flushSiteAction();
 
         self::assertSame(ContextualFeedbackSeverity::ERROR, $this->onlyMessage()['severity']);
+    }
+
+    /**
+     * AUD-062 F01 step 3: a request that went through is not a purge that matched.
+     * With no Surrogate-Key emitted for the site tag, the editor reads that, not "flushed".
+     */
+    #[Test]
+    public function aSiteFlushThatMatchedNothingIsNotReportedAsSuccess(): void
+    {
+        $this->siteResult = PurgeResult::done([], ['main']);
+
+        $this->controller('main')->flushSiteAction();
+
+        $message = $this->onlyMessage();
+        self::assertSame(ContextualFeedbackSeverity::WARNING, $message['severity']);
+        self::assertStringContainsString('no Surrogate-Key emitted for main', $message['body']);
+        self::assertStringNotContainsString('has been flushed', $message['body']);
+    }
+
+    #[Test]
+    public function aSiteFlushTheProxyRefusedIsReportedAsAnError(): void
+    {
+        $this->siteResult = PurgeResult::failed(['main']);
+
+        $this->controller('main')->flushSiteAction();
+
+        self::assertSame(ContextualFeedbackSeverity::ERROR, $this->onlyMessage()['severity']);
+    }
+
+    #[Test]
+    public function aSiteFlushWithTheIntegrationDisabledSaysSo(): void
+    {
+        $this->siteResult = PurgeResult::disabled();
+
+        $this->controller('main')->flushSiteAction();
+
+        self::assertSame(ContextualFeedbackSeverity::WARNING, $this->onlyMessage()['severity']);
+        self::assertStringContainsString('disabled', $this->onlyMessage()['body']);
     }
 }
