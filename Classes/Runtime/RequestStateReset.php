@@ -29,10 +29,6 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  *
  * This is the same set TYPO3's own testing framework resets between in-process
  * frontend requests (FrameworkState::reset()), plus the database connections.
- *
- * Classes are only touched if they are already loaded: before the first
- * bootstrap there is nothing to reset, and the check keeps this usable without
- * TYPO3 on the include path.
  */
 final class RequestStateReset
 {
@@ -45,29 +41,24 @@ final class RequestStateReset
             unset($GLOBALS[$name]);
         }
 
-        if (class_exists(GeneralUtility::class, false)) {
-            GeneralUtility::flushInternalRuntimeCaches();
-            GeneralUtility::purgeInstances();
-        }
-
-        if (class_exists(ConnectionPool::class, false)) {
-            self::closeDatabaseConnections();
-        }
+        GeneralUtility::flushInternalRuntimeCaches();
+        GeneralUtility::purgeInstances();
+        self::closeDatabaseConnections();
     }
 
     /**
      * The error and exception handler currently installed, as a pair.
      *
-     * PHP has no getter for either; installing a placeholder returns the
-     * previous one, and restoring removes the placeholder again.
+     * PHP has no getter for either. Setting `null` returns the current handler,
+     * and restoring removes the `null` entry again.
      *
      * @return array{0: mixed, 1: mixed}
      */
     public static function currentHandlers(): array
     {
-        $error = set_error_handler(static fn(): bool => false);
+        $error = set_error_handler(null);
         restore_error_handler();
-        $exception = set_exception_handler(static function (\Throwable $e): void {});
+        $exception = set_exception_handler(null);
         restore_exception_handler();
 
         return [$error, $exception];
@@ -84,18 +75,25 @@ final class RequestStateReset
      * Restoring to a recorded baseline rather than popping a fixed number keeps
      * handlers that were there before the request (the test runner's, or one the
      * worker itself installs) and copes with a request that failed before
-     * registering anything. The bound stops a handler that re-registers itself
-     * from turning this into an endless loop.
+     * registering anything.
      *
      * @param array{0: mixed, 1: mixed} $baseline from currentHandlers()
      */
     public static function restoreHandlers(array $baseline): void
     {
-        for ($i = 0; $i < 16 && self::currentHandlers()[0] !== $baseline[0]; ++$i) {
-            restore_error_handler();
-        }
-        for ($i = 0; $i < 16 && self::currentHandlers()[1] !== $baseline[1]; ++$i) {
-            restore_exception_handler();
+        self::popUntil(0, $baseline[0], restore_error_handler(...));
+        self::popUntil(1, $baseline[1], restore_exception_handler(...));
+    }
+
+    /**
+     * Every pop removes one entry, so the stack shrinks on each pass and the
+     * loop ends at the baseline or, if the request removed that too, at an
+     * empty stack — never in an endless loop.
+     */
+    private static function popUntil(int $slot, mixed $baseline, \Closure $pop): void
+    {
+        while (($current = self::currentHandlers()[$slot]) !== $baseline && null !== $current) {
+            $pop();
         }
     }
 

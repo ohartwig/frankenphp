@@ -164,6 +164,55 @@ final class RequestStateResetTest extends TestCase
         }
     }
 
+    /**
+     * The two stacks are restored each to its own baseline. With different
+     * handlers on each, mixing them up would pop the exception handler that was
+     * there before the request.
+     */
+    #[Test]
+    public function eachStackIsRestoredToItsOwnBaseline(): void
+    {
+        $outerError = static fn(): bool => true;
+        $outerException = static function (\Throwable $e): void {};
+        set_error_handler($outerError);
+        set_exception_handler($outerException);
+        try {
+            $baseline = RequestStateReset::currentHandlers();
+            set_exception_handler(static function (\Throwable $e): void {});
+
+            RequestStateReset::restoreHandlers($baseline);
+
+            self::assertSame([$outerError, $outerException], RequestStateReset::currentHandlers());
+        } finally {
+            restore_exception_handler();
+            restore_error_handler();
+        }
+    }
+
+    /**
+     * Looking at the handlers must not change them: the peek installs a
+     * placeholder and has to take it off again.
+     */
+    #[Test]
+    public function peekingAtTheHandlersLeavesThemInstalled(): void
+    {
+        $outerError = static fn(): bool => true;
+        $outerException = static function (\Throwable $e): void {};
+        set_error_handler($outerError);
+        set_exception_handler($outerException);
+        try {
+            RequestStateReset::currentHandlers();
+
+            self::assertSame($outerError, set_error_handler(null));
+            restore_error_handler();
+            self::assertSame($outerException, set_exception_handler(null));
+            restore_exception_handler();
+        } finally {
+            restore_exception_handler();
+            restore_error_handler();
+        }
+    }
+
     /** @param array<string, Connection> $connections */
     private function setPooledConnections(array $connections): void
     {
