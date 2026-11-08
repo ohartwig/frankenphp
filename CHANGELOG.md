@@ -3,6 +3,34 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.5.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.7...v5.5.0) (2026-11-08)
+
+### :sparkles: Features
+
+* **worker:** keep database connections open between requests ([d7f749c](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/d7f749c38f8ff7ca0dfb55c36e10ad07358b32c9))
+
+### :white_check_mark: Tests
+
+* **worker:** capture the rollback report without error_log ([fda6007](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/fda60073cb0d117f0f284338330c6ddf197acc7c))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([988e490](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/988e4908de066c18df1dbdb4b766cc02f0073cb8))
+* **repo-templates:** sync ([26be084](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/26be084bb32b94a2a1250ebfe352bcfc88d53046))
+* **repo-templates:** sync ([f9c434a](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/f9c434a81fe1e50540c6e6bf709c44df8e5217fc))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.150-8.5 ([caab53e](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/caab53e18213a496e47523fab9be129359cc8a98))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.149-8.5 ([c2186f5](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/c2186f5915d79a4f7d5b3ae6f12e72f6d6f0d322))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.148-8.5 ([b59b128](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/b59b128a1cc61e78cd1f98f8c6324b75760b3525))
+* **repo-templates:** sync ([d79f767](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/d79f767233a54633871230a35a342393a594c0ac))
+* **repo-templates:** sync ([79a5f84](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/79a5f842462746b748e988da0cfc928495958169))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.144-8.5 ([1bcbf1f](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/1bcbf1f5a53d2354942fd8e9a36ce57f25eddaf1))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.143-8.5 ([f97156a](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/f97156acbfedbbcacdbe20d7193d9dc72cc28858))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.142-8.5 ([15c6dfe](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/15c6dfe7bb19406a1e764c403b4c3b988681abad))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.139-8.5 ([b9b0de2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/b9b0de2ce9c63b14f907d63cad8968d424fcdcf0))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.138-8.5 ([a12d6ca](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/a12d6ca2ed39e0c553e63d7349b643d3681dba0b))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.137-8.5 ([9e9eeed](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/9e9eeed2fbc246bcaa2a2e6fe1fd805bedc5b2ac))
+* **repo-templates:** sync ([4820b28](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/4820b28c100378ac0f4b5333a4e43027d1915840))
+
 ## [5.4.7](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.4.6...v5.4.7) (2026-11-04)
 
 ### :bug: Fixes
