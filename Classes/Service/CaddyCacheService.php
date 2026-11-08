@@ -388,6 +388,12 @@ class CaddyCacheService
             return false;
         }
 
+        PurgeAudit::record('purge', [
+            'key' => rawurldecode((string) preg_replace('#^.*?/souin/#', '', $target)),
+            'ref' => $ref,
+            'tags' => $tags,
+        ]);
+
         try {
             $request = $this->requestFactory->createRequest('PURGE', $target);
 

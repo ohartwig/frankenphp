@@ -10,6 +10,7 @@ use TYPO3\CMS\Core\Cache\Event\CacheFlushEvent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use Koh\FrankenPHP\Service\CaddyCacheService;
+use Koh\FrankenPHP\Service\PurgeAudit;
 
 class CacheInvalidationListener
 {
@@ -45,7 +46,7 @@ class CacheInvalidationListener
         // Defer the HTTP request to Caddy until after the current request finishes.
         // Executing outgoing HTTP requests during DI container teardown in
         // FrankenPHP worker mode causes zend_mm_heap corruption.
-        $this->deferFullFlush();
+        $this->deferFullFlush('CacheFlushEvent groups=' . implode(',', $event->getGroups()));
     }
 
     /**
@@ -94,7 +95,7 @@ class CacheInvalidationListener
 
         $cacheCmd = strtolower((string)($params['cacheCmd'] ?? ''));
         if ($cacheCmd === 'all' || $cacheCmd === 'pages') {
-            $this->deferFullFlush();
+            $this->deferFullFlush('clear_cacheCmd=' . $cacheCmd);
             return;
         }
 
@@ -127,8 +128,11 @@ class CacheInvalidationListener
         self::$purgedPerDataHandler[$dataHandler] = $done;
     }
 
-    private function deferFullFlush(): void
+    private function deferFullFlush(string $reason): void
     {
+        // The flush itself runs at shutdown, where the code path that asked
+        // for it is gone; record it now.
+        PurgeAudit::record('full-flush-scheduled', ['reason' => $reason]);
         $service = $this->caddyCacheService;
         $logger = $this->logger;
         register_shutdown_function(static function () use ($service, $logger): void {
