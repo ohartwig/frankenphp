@@ -3,6 +3,12 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.7.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.6.2...v5.7.0) (2026-11-08)
+
+### :sparkles: Features
+
+* **middleware:** redirect cHash-less page URLs instead of answering 404 ([a805e51](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/a805e5152a5fde92071ff6b3823c8b094952d061))
+
 ## [5.6.2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.6.1...v5.6.2) (2026-11-08)
 
 ### :memo: Documentation
