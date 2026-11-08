@@ -10,7 +10,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 
 - **FrankenPHP frontend worker** — request classification separates frontend requests (worker mode) from the backend and the Install Tool. The worker bootstraps TYPO3 per request and resets the state a request leaves in static properties and globals before the next one (`RequestStateReset`).
 - **103 Early Hints** — real RFC 8297 responses via `headers_send(103)` from the AssetCollector. CSS/JS preloads start in parallel with server-side rendering.
-- **Caddy/Souin cache invalidation** — based on the REST API via PURGE/DELETE. Three strategies: by URL, by tag (Surrogate-Key), wildcard.
+- **Caddy/Souin cache invalidation** — PURGE through Souin's admin API: by exact URL key, by tag (Surrogate-Key), or everything.
 - **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
   Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. The extension emits `Surrogate-Key` (site identifier and `pageId_<n>`) on every rendered frontend page through `SurrogateKeyMiddleware`, so tag purges have entries to find; files are served by the web server and carry no key. A tag purge only sends the tags Souin actually holds and logs `no Surrogate-Key emitted for tag` for the rest; "Flush site" in the backend module reports that instead of success. Pages cached before the key was emitted are not reachable by tag until they expire or are flushed completely.
   A saved page or content element purges the URLs of the affected pages in the page's own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place), each by its exact Souin key (`GET-<host>-<path>$`), plus one purge per host for query-string variants (`GET-<host>-/?.+=`). Souin treats a purge key as an unanchored regex and as a prefix, so an unanchored key for `/` empties the whole host. The core flushes every sibling of a saved page; the edge follows only when the save changed a field a menu or teaser shows (title, slug, visibility, position, abstract, media and the like), otherwise it purges the page and its parent. A save in a workspace purges nothing; its publish does.
@@ -56,17 +56,24 @@ Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration
 
 ### Cache invalidation
 
-`CaddyCacheService` talks to the Souin REST API:
+`CaddyCacheService` sends PURGE to Souin's **admin API** (`{protocol}://{caddyHost}:{caddyPort}{apiEndpoint}`). A PURGE to the public page URL is proxied upstream and has no effect, and the edge blocks PURGE from outside; the `tls*` options cover mTLS to the proxy.
 
-- **DELETE** `{proto}://{host}:{port}{apiEndpoint}` with the JSON body `{"url": "https://example.com/path"}` — by URL
-- **PURGE** `{proto}://{host}:{port}{apiEndpoint}` with a `Surrogate-Key` header (tags separated by comma and space, as Souin splits them) — by tag. Souin answers 204 to every purge, matching or not; anything else is logged as a failure
-- Wildcard URLs — site-wide
+- **Per URL** — key `GET-<host>-<path>$`, plus once per host and call `GET-<host>-/?.+=` for query-string variants
+- **Per tag** — `Surrogate-Key` header (tags separated by comma and space, as Souin splits them). Only tags Souin actually holds are sent; the rest is logged as `no Surrogate-Key emitted for tag`
+- **Everything** — `/.+`, the whole Souin store
+
+Souin answers 204 to every purge, matching or not; anything else is logged as a failure.
+
+**Why the key is anchored.** Souin compiles the key into a regex, matches it unanchored, and also deletes every key it is a prefix of: `GET-host-/` empties the host, `GET-host-/blog` everything below `/blog` and `/blogger`. Groups and escapes cannot narrow it: TYPO3's `Uri` percent-encodes `\`, `(`, `[`, `|`, `^`, and Souin does not decode them, so such a key matches nothing. Characters that are regex syntax or would be encoded become `.` in the key.
 
 Automatic invalidation via:
 
-- **PSR-14 `CacheFlushEvent`** — general cache flush
-- **DataHandler hook `processDatamap_afterDatabaseOperations`** — `pages`, `tt_content`, `sys_file`, `sys_file_reference`, `fe_users`, `fe_groups`
-- **PSR-14 `SystemInformationToolbarCollectorEvent`** — backend toolbar integration
+- **DataHandler hook `clearCachePostProc`** — every editorial change: save, workspace publish, move, delete, `clearCacheCmd`, "flush page"
+- **DataHandler hook `processDatamap_afterDatabaseOperations`** — direct saves of `pages` and `tt_content`
+- **PSR-14 `CacheFlushEvent`** — general cache flush, deferred until after the request
+- **`FileCacheInvalidationListener`** — deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public path and processed variants on every site host
+
+What a save purges: the URLs of the page in its own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place); the core's siblings only when a menu or teaser field changed (title, slug, visibility, position, abstract, media and the like), otherwise the page and its parent; nothing for a save in a workspace (its publish purges); each page once per DataHandler run.
 
 An optional API key is sent in the `X-API-Key` header.
 
@@ -137,15 +144,17 @@ In the TYPO3 backend under "Admin Tools → Extension Configuration → frankenp
 | Key | Description | Default |
 |---|---|---|
 | `enabled` | Send invalidations to the proxy at all. `0` = no PURGE, no admin API call (local development without caddy-proxy) | `1` |
-| `caddyHost` | Caddy server host for the cache API | `localhost` |
-| `caddyPort` | Caddy server port | `80` |
-| `caddyProtocol` | `http` or `https` | `http` |
-| `caddyApiEndpoint` | Souin API path | `/souin/api/souin` |
-| `caddyApiKey` | Optional, sends the `X-API-Key` header | — |
+| `caddyHost` | Host of the Souin admin API | `localhost` |
+| `caddyPort` | Port of the Souin admin API | `2019` |
+| `protocol` | `http` or `https` | `http` |
+| `apiEndpoint` | Souin API path | `/souin-api/souin` |
+| `apiKey` | Optional, sends the `X-API-Key` header | — |
 | `enableDebugLogging` | Detailed logs for cache calls | `0` |
 | `httpTimeout` | HTTP timeout (seconds) | `5` |
 | `invalidateAllSites` | A cache flush invalidates all sites | `1` |
-| `cacheTagHeader` | Header name for tag invalidation | `Surrogate-Key` |
+| `cacheTagsHeader` | Header name for tag invalidation | `Surrogate-Key` |
+| `tlsClientCert`, `tlsClientKey` | Client certificate and key (PEM) for mTLS to the proxy; empty = none | — |
+| `tlsCaBundle`, `tlsVerify` | CA bundle to verify the proxy certificate; without one, `tlsVerify` decides | —, `1` |
 
 ## Worker reload (without a container restart)
 
