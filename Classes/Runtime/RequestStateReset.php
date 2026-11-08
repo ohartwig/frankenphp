@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Koh\FrankenPHP\Runtime;
 
-use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
@@ -23,7 +22,9 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  *   of which cache request data.
  * - `ConnectionPool::$connections` keeps the database connection, including any
  *   open transaction, session variables, and a socket the server may have
- *   closed after wait_timeout.
+ *   closed after wait_timeout. reset() closes it; the worker loop instead
+ *   uses resetRequestState() and leaves the connection to
+ *   DatabaseConnectionReuse, which keeps it only while that is safe.
  * - `$GLOBALS['BE_USER']`, `['LANG']` and `['TYPO3_REQUEST']` are only set when
  *   a request needs them, so a request that does not would see the previous one's.
  *
@@ -35,7 +36,21 @@ final class RequestStateReset
     /** Globals TYPO3 sets conditionally during a request. */
     private const REQUEST_GLOBALS = ['BE_USER', 'LANG', 'TYPO3_REQUEST', 'TSFE'];
 
+    /**
+     * Everything, database connections included: what a fresh PHP process
+     * would start with.
+     */
     public static function reset(): void
+    {
+        self::resetRequestState();
+        PooledConnections::closeAll();
+    }
+
+    /**
+     * Everything except the database connections, whose lifetime
+     * DatabaseConnectionReuse decides.
+     */
+    public static function resetRequestState(): void
     {
         foreach (self::REQUEST_GLOBALS as $name) {
             unset($GLOBALS[$name]);
@@ -43,7 +58,6 @@ final class RequestStateReset
 
         GeneralUtility::flushInternalRuntimeCaches();
         GeneralUtility::purgeInstances();
-        self::closeDatabaseConnections();
     }
 
     /**
@@ -95,29 +109,5 @@ final class RequestStateReset
         while (($current = self::currentHandlers()[$slot]) !== $baseline && null !== $current) {
             $pop();
         }
-    }
-
-    /**
-     * Closes and forgets every connection the request opened.
-     *
-     * `ConnectionPool::resetConnections()` only empties the list; the connection
-     * objects would stay open until garbage collection reached them. The closure
-     * is bound to ConnectionPool to reach its protected static property without
-     * creating a pool instance, which would read TYPO3_CONF_VARS.
-     */
-    private static function closeDatabaseConnections(): void
-    {
-        $close = \Closure::bind(static function (): void {
-            foreach (static::$connections as $connection) {
-                try {
-                    $connection->close();
-                } catch (\Throwable) {
-                    // A connection that cannot be closed cleanly is dropped anyway.
-                }
-            }
-            static::$connections = [];
-        }, null, ConnectionPool::class);
-
-        $close();
     }
 }

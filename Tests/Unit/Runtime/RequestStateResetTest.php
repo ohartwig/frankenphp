@@ -112,6 +112,25 @@ final class RequestStateResetTest extends TestCase
     }
 
     /**
+     * The worker loop resets everything else and leaves the connections to
+     * DatabaseConnectionReuse.
+     */
+    #[Test]
+    public function theRequestStateResetLeavesDatabaseConnectionsOpen(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->expects(self::never())->method('close');
+        $this->setPooledConnections(['Default' => $connection]);
+        $GLOBALS['BE_USER'] = new \stdClass();
+
+        RequestStateReset::resetRequestState();
+
+        self::assertSame(['Default' => $connection], $this->pooledConnections());
+        self::assertArrayNotHasKey('BE_USER', $GLOBALS);
+        $this->setPooledConnections([]);
+    }
+
+    /**
      * One connection that fails to close must not keep the others open, nor
      * escape as an exception that would end the worker loop.
      */

@@ -9,15 +9,25 @@ namespace Koh\FrankenPHP\Runtime;
  *
  * Bootstraps TYPO3 per request. A fresh bootstrap does not clear what the
  * previous request left in static properties and globals, so the loop resets
- * that state before and after every request (see RequestStateReset).
+ * that state before and after every request (see RequestStateReset). Database
+ * connections are the exception: DatabaseConnectionReuse decides at the same
+ * two points whether they stay open for the next request.
  * Backend and Install requests are rejected with HTTP 503.
  */
 final readonly class FrontendWorker
 {
+    private DatabaseConnectionReuse $connections;
+
+    /**
+     * @param DatabaseConnectionReuse|null $connections null: reuse with the defaults
+     */
     public function __construct(
         private RequestClassifier $classifier,
         private string $autoloadPath,
-    ) {}
+        ?DatabaseConnectionReuse $connections = null,
+    ) {
+        $this->connections = $connections ?? DatabaseConnectionReuse::fromEnvironment([]);
+    }
 
     public function run(int $maxRequests = 1): void
     {
@@ -31,9 +41,10 @@ final readonly class FrontendWorker
         while ($nbRequests < $maxRequests && $running) {
             $running = \frankenphp_handle_request($this->handleRequest(...));
             // After the request as well as before the next one: an idle worker
-            // should not hold a database connection or the last page's objects
-            // until traffic arrives again.
-            RequestStateReset::reset();
+            // should not hold the last page's objects until traffic arrives
+            // again, nor a connection that is not fit for the next request.
+            RequestStateReset::resetRequestState();
+            $this->connections->afterRequest();
             RequestStateReset::restoreHandlers($handlers);
             gc_collect_cycles();
             ++$nbRequests;
@@ -42,7 +53,8 @@ final readonly class FrontendWorker
 
     private function handleRequest(): void
     {
-        RequestStateReset::reset();
+        RequestStateReset::resetRequestState();
+        $this->connections->beforeRequest();
 
         if (!$this->classifier->isFrontendRequest()) {
             http_response_code(503);

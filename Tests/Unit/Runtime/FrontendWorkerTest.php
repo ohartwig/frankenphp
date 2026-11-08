@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace Koh\FrankenPHP\Tests\Unit\Runtime;
 
+use Koh\FrankenPHP\Runtime\DatabaseConnectionReuse;
 use Koh\FrankenPHP\Runtime\FrontendWorker;
+use Koh\FrankenPHP\Runtime\PooledConnections;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
 use Koh\FrankenPHP\Runtime\RequestStateReset;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
+use Koh\FrankenPHP\Tests\Fixtures\ConnectionProbe;
 use Koh\FrankenPHP\Tests\Fixtures\FrankenPhpWorkerApiSpy;
 use Koh\FrankenPHP\Tests\Fixtures\RequestStateProbe;
 
@@ -43,17 +46,24 @@ final class FrontendWorkerTest extends TestCase
     protected function tearDown(): void
     {
         $_SERVER = $this->server;
+        PooledConnections::closeAll();
         parent::tearDown();
     }
 
-    private function worker(string $uri, ?string $autoloadPath = null): FrontendWorker
+    private function worker(string $uri, ?string $autoloadPath = null, ?DatabaseConnectionReuse $connections = null): FrontendWorker
     {
         $_SERVER['REQUEST_URI'] = $uri;
 
-        return new FrontendWorker(
-            new RequestClassifier('/typo3'),
-            $autoloadPath ?? __DIR__ . '/../../Fixtures/ThrowingAutoload.php',
-        );
+        return $connections === null
+            ? new FrontendWorker(
+                new RequestClassifier('/typo3'),
+                $autoloadPath ?? __DIR__ . '/../../Fixtures/ThrowingAutoload.php',
+            )
+            : new FrontendWorker(
+                new RequestClassifier('/typo3'),
+                $autoloadPath ?? __DIR__ . '/../../Fixtures/ThrowingAutoload.php',
+                $connections,
+            );
     }
 
     /**
@@ -187,6 +197,59 @@ final class FrontendWorkerTest extends TestCase
         $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/HandlerRegisteringAutoload.php'));
 
         self::assertSame($before, RequestStateReset::currentHandlers());
+    }
+
+    /**
+     * The connection the first request opened serves the ones after it, by
+     * default — the TLS handshake is paid once, not per request.
+     */
+    #[Test]
+    public function laterRequestsGetTheConnectionTheFirstOneOpened(): void
+    {
+        ConnectionProbe::reset();
+        FrankenPhpWorkerApiSpy::reset(3);
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/ConnectionUsingAutoload.php'), 3);
+
+        [$first, $second, $third] = ConnectionProbe::$foundAtStart;
+        self::assertNull($first);
+        self::assertNotNull($second);
+        self::assertSame($second, $third);
+        self::assertTrue($second->isConnected());
+    }
+
+    /**
+     * The check before a request runs in the worker, not only after one: a
+     * connection the worker has not seen through a request is not handed on.
+     */
+    #[Test]
+    public function aConnectionTheWorkerDidNotKeepIsNotHandedToARequest(): void
+    {
+        ConnectionProbe::reset();
+        $stray = ConnectionProbe::connection();
+        $stray->executeQuery('SELECT 1')->free();
+        ConnectionProbe::pool('Default', $stray);
+
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/ConnectionUsingAutoload.php'));
+
+        self::assertSame([null], ConnectionProbe::$foundAtStart);
+        self::assertFalse($stray->isConnected());
+    }
+
+    /** Switched off, every request opens its own connection, as before. */
+    #[Test]
+    public function withReuseSwitchedOffEveryRequestOpensItsOwnConnection(): void
+    {
+        ConnectionProbe::reset();
+        FrankenPhpWorkerApiSpy::reset(3);
+
+        $this->runCapturing(
+            $this->worker('/a-page', __DIR__ . '/../../Fixtures/ConnectionUsingAutoload.php', DatabaseConnectionReuse::fromEnvironment(['DB_REUSE' => '0'])),
+            3,
+        );
+
+        self::assertSame([null, null, null], ConnectionProbe::$foundAtStart);
+        self::assertSame([], PooledConnections::all());
     }
 
     #[Test]
