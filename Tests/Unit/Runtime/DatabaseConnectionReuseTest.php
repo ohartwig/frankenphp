@@ -28,27 +28,14 @@ final class DatabaseConnectionReuseTest extends TestCase
 {
     private float $now = 1000.0;
 
-    private string $logFile = '';
-
-    private string|false $previousLog = false;
+    /** @var list<string> */
+    private array $logged = [];
 
     private string $databaseFile = '';
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-        // The rollback is logged; with no error_log setting that goes to
-        // STDERR, which Infection takes for a crashed suite.
-        $this->logFile = (string) tempnam(sys_get_temp_dir(), 'reuse-log');
-        $this->previousLog = ini_get('error_log');
-        ini_set('error_log', $this->logFile);
-    }
 
     protected function tearDown(): void
     {
         PooledConnections::closeAll();
-        ini_set('error_log', false === $this->previousLog ? '' : $this->previousLog);
-        @unlink($this->logFile);
         if ('' !== $this->databaseFile) {
             @unlink($this->databaseFile);
         }
@@ -62,7 +49,9 @@ final class DatabaseConnectionReuseTest extends TestCase
         int $maxRequests = 1000,
         bool $livenessCheck = true,
     ): DatabaseConnectionReuse {
-        return new DatabaseConnectionReuse($enabled, $idleTimeout, $maxAge, $maxRequests, $livenessCheck, fn(): float => $this->now);
+        return new DatabaseConnectionReuse($enabled, $idleTimeout, $maxAge, $maxRequests, $livenessCheck, fn(): float => $this->now, function (string $message): void {
+            $this->logged[] = $message;
+        });
     }
 
     /** A connection the request has used, in the pool under Default. */
@@ -130,7 +119,8 @@ final class DatabaseConnectionReuseTest extends TestCase
         self::assertNull($this->pooled());
         self::assertFalse($connection->isConnected());
         self::assertSame(0, (int) $this->fileConnection()->fetchOne('SELECT COUNT(*) FROM t'), 'the insert was rolled back');
-        self::assertStringContainsString('left a transaction open on database connection "Default"', (string) file_get_contents($this->logFile));
+        self::assertCount(1, $this->logged);
+        self::assertStringContainsString('left a transaction open on database connection "Default"', $this->logged[0]);
     }
 
     /**

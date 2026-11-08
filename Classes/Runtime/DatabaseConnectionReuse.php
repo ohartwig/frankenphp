@@ -52,11 +52,15 @@ final class DatabaseConnectionReuse
     /** @var \Closure(): float */
     private readonly \Closure $clock;
 
+    /** @var \Closure(string): mixed */
+    private readonly \Closure $log;
+
     /**
-     * @param int                      $idleTimeout seconds a connection may sit unused between requests; <= 0 disables the limit
-     * @param int                      $maxAge      seconds since the connection was first kept; <= 0 disables the limit
-     * @param int                      $maxRequests requests a connection serves before it is closed; <= 0 disables the limit
-     * @param (\Closure(): float)|null $clock       current time in seconds, for tests
+     * @param int                            $idleTimeout seconds a connection may sit unused between requests; <= 0 disables the limit
+     * @param int                            $maxAge      seconds since the connection was first kept; <= 0 disables the limit
+     * @param int                            $maxRequests requests a connection serves before it is closed; <= 0 disables the limit
+     * @param (\Closure(): float)|null       $clock       current time in seconds, for tests
+     * @param (\Closure(string): mixed)|null $log         where the rollback is reported; error_log() by default
      */
     public function __construct(
         private readonly bool $enabled,
@@ -65,9 +69,11 @@ final class DatabaseConnectionReuse
         private readonly int $maxRequests,
         private readonly bool $livenessCheck,
         ?\Closure $clock = null,
+        ?\Closure $log = null,
     ) {
         $this->usage = new \WeakMap();
         $this->clock = $clock ?? static fn(): float => microtime(true);
+        $this->log = $log ?? error_log(...);
     }
 
     /**
@@ -144,7 +150,7 @@ final class DatabaseConnectionReuse
             return null;
         }
         if ($connection->isTransactionActive()) {
-            self::rollBack($name, $connection);
+            $this->rollBack($name, $connection);
 
             return null;
         }
@@ -195,9 +201,9 @@ final class DatabaseConnectionReuse
      * Rolls back every nesting level. The connection is closed afterwards in
      * any case, which makes the server roll back whatever this did not reach.
      */
-    private static function rollBack(string $name, Connection $connection): void
+    private function rollBack(string $name, Connection $connection): void
     {
-        error_log(sprintf(
+        ($this->log)(sprintf(
             'FrankenPHP worker: a request left a transaction open on database connection "%s"; rolled back and closed.',
             $name
         ));
