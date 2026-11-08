@@ -42,6 +42,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `DB_REUSE_MAX_AGE` | Seconds a connection is kept at most (`0` = no limit) | `600` |
 | `DB_REUSE_MAX_REQUESTS` | Requests a connection serves at most (`0` = no limit) | `1000` |
 | `DB_REUSE_LIVENESS_CHECK` | `SELECT 1` on a kept connection before the request, so a connection the server dropped is replaced rather than failing the request | `1` |
+| `KOH_CHASH_REDIRECT` | Redirect page URLs that carry parameters without the required cHash to the same URL without them, instead of the 404 (see `CacheHashRedirectMiddleware`); `0` restores the 404 | `1` |
 
 ### EarlyHintMiddleware
 
@@ -53,6 +54,14 @@ After `handler->handle()`, the PSR-15 middleware collects the CSS and JS sources
 Both mechanisms deliver preload hints the browser can deduplicate. Pages heavy on CSS/JS get measurably better LCP.
 
 Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration/RequestMiddlewares.php`).
+
+### CacheHashRedirectMiddleware
+
+With `FE.cacheHash.enforceValidation` and `FE.pageNotFoundOnCHashError`, TYPO3 answers a page URL that carries a parameter the cHash would have to cover, but no cHash, with 404. That keeps random parameters from bypassing every cache, but a visitor who followed a link with a click id a mailer or a social network appended lands on an error page.
+
+The middleware runs right before `typo3/cms-frontend/page-argument-validator` and acts only in that case: GET or HEAD, no (or an empty) cHash, at least one parameter the cHash would have to cover. It answers `301` to the same URL without those parameters, with `Cache-Control: public, max-age=3600`. Parameters excluded from the cHash (`utm_*`, `gclid`, …) stay in the target. A redirect costs no render and creates no page cache entry, so the protection stays and the visitor gets the page.
+
+Left to TYPO3: a cHash that is present but wrong (still 404), other methods, and configurations in which a missing cHash is not a 404. `KOH_CHASH_REDIRECT=0` switches it off.
 
 ### Cache invalidation
 
