@@ -3,6 +3,16 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.6.2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.6.1...v5.6.2) (2026-11-08)
+
+### :memo: Documentation
+
+* **readme:** describe cache invalidation as it works ([bc7a1ee](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/bc7a1ee7749134a2ff802b2244631a7dba1575ab))
+
+### :fast_forward: Performance
+
+* **cache:** purge a host's query-string variants once per run ([71e40c2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/71e40c22e3fceacbc1ade744cf3f107befdefc70))
+
 ## [5.6.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.6.0...v5.6.1) (2026-11-08)
 
 ### :bug: Fixes
