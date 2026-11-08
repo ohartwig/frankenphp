@@ -42,6 +42,12 @@ final class CacheInvalidationListenerTest extends TestCase
 
     private int $contentPid = 0;
 
+    /** @var list<bool> */
+    private array $withQueryVariants = [];
+
+    /** @var list<list<string>> */
+    private array $queryVariantCalls = [];
+
     /** @var array<string, mixed> The pages row (pid, l10n_parent) the listener looks up. */
     private array $pageRow = [];
 
@@ -55,12 +61,22 @@ final class CacheInvalidationListenerTest extends TestCase
             function (int $pageId): array {
                 $this->calls[] = ['method' => 'getPageUrls', 'argument' => $pageId];
 
+                if ($pageId >= 500) {
+                    return ['https://www.example.org/page-' . $pageId, 'https://en.example.org/page-' . $pageId];
+                }
+
                 return $pageId > 0 ? ['https://www.example.org/page-' . $pageId] : [];
             }
         );
         $service->method('invalidateUrls')->willReturnCallback(
-            function (array $urls): void {
+            function (array $urls, bool $withQueryVariants = true): void {
                 $this->calls[] = ['method' => 'invalidateUrls', 'argument' => $urls];
+                $this->withQueryVariants[] = $withQueryVariants;
+            }
+        );
+        $service->method('invalidateQueryVariants')->willReturnCallback(
+            function (array $urls): void {
+                $this->queryVariantCalls[] = $urls;
             }
         );
         $service->method('invalidateByTags')->willReturnCallback(
@@ -658,5 +674,38 @@ final class CacheInvalidationListenerTest extends TestCase
         }
 
         self::assertSame([], $lines);
+    }
+
+    // --- query-string variants ---------------------------------------------
+
+    /**
+     * Each page purges its exact URLs only; the query-string variants of a
+     * host go once per DataHandler run, however many pages on that host were
+     * purged. A publish of three pages used to send the same host-wide key
+     * three times.
+     */
+    #[Test]
+    public function queryVariantsArePurgedOncePerHostAndRun(): void
+    {
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->postProc(['tags' => ['pageId_501' => true, 'pageId_502' => true]], $dataHandler);
+        $this->postProc(['tags' => ['pageId_503' => true]], $dataHandler);
+
+        self::assertSame([false, false, false], $this->withQueryVariants);
+        self::assertSame([
+            ['https://www.example.org/page-501', 'https://en.example.org/page-501'],
+        ], $this->queryVariantCalls);
+
+        $this->postProc(['tags' => ['pageId_501' => true]], $this->createStub(DataHandler::class));
+        self::assertCount(2, $this->queryVariantCalls, 'a new run purges them again');
+    }
+
+    #[Test]
+    public function aRunWithoutUrlsPurgesNoQueryVariants(): void
+    {
+        $this->postProc(['tags' => ['pageId_0' => true, 'cachetag' => true]]);
+
+        self::assertSame([], $this->queryVariantCalls);
     }
 }

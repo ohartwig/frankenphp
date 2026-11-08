@@ -155,26 +155,53 @@ class CaddyCacheService
     }
 
     /**
-     * Purge each URL by its exact Souin key, then the query-string variants
-     * ("/?utm_source=…") of every host involved, once per host and call. See
-     * souinKeyForUrl() for why both are needed and why they cannot be one key.
+     * Purge each URL by its exact Souin key, then -- unless the caller does that
+     * itself -- the query-string variants ("/?utm_source=…") of every host
+     * involved. See souinKeyForUrl() for why both are needed and why they cannot
+     * be one key.
      *
      * @param list<string> $urls
      */
-    public function invalidateUrls(array $urls): void
+    public function invalidateUrls(array $urls, bool $withQueryVariants = true): void
     {
-        $hosts = [];
         foreach (array_unique($urls) as $url) {
             $this->sendPurgeToProxy($url);
+        }
+        if ($withQueryVariants) {
+            $this->invalidateQueryVariants($urls);
+        }
+    }
+
+    /**
+     * Purge the query-string variants of the hosts these URLs are on, one
+     * request per host. A caller that purges several pages in one go collects
+     * their URLs and calls this once, rather than once per page.
+     *
+     * @param list<string> $urls
+     */
+    public function invalidateQueryVariants(array $urls): void
+    {
+        $hosts = [];
+        foreach ($urls as $url) {
             $host = self::hostOf($url);
             if ($host !== '') {
-                $hosts[$host] = $url;
+                $hosts[$host] ??= $url;
             }
         }
         $target = rtrim($this->buildApiUrl(), '/');
         foreach ($hosts as $host => $url) {
             $this->purgeViaApi($target . '/GET-' . self::souinLiteral($host) . '-/?.+=', [], $url . ' (query variants)');
         }
+    }
+
+    /**
+     * Host and, when present, port of a URL: the host part of its Souin key.
+     */
+    public static function hostOf(string $url): string
+    {
+        $parts = parse_url($url);
+
+        return ($parts['host'] ?? '') . (isset($parts['port']) ? ':' . $parts['port'] : '');
     }
 
     /**
@@ -499,13 +526,6 @@ class CaddyCacheService
         $path = rawurldecode($parts['path'] ?? '/');
 
         return 'GET-' . self::souinLiteral(self::hostOf($url)) . '-' . self::souinLiteral($path === '' ? '/' : $path) . '$';
-    }
-
-    private static function hostOf(string $url): string
-    {
-        $parts = parse_url($url);
-
-        return ($parts['host'] ?? '') . (isset($parts['port']) ? ':' . $parts['port'] : '');
     }
 
     /**

@@ -1054,4 +1054,59 @@ final class CaddyCacheServiceTest extends TestCase
         self::assertSame(['https://www.example.org/x'], $urls);
         self::assertSame([42, 42, 0], $parameters, 'uid, l10n_parent, t3ver_wsid = 0');
     }
+
+    /**
+     * A caller that collects the query-variant purge itself turns it off per
+     * call; the exact keys still go out.
+     */
+    #[Test]
+    public function queryVariantsCanBeLeftToTheCaller(): void
+    {
+        $this->service()->invalidateUrls(['https://www.example.org/a', 'https://www.example.org/b'], false);
+
+        self::assertSame([
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/a$',
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/b$',
+        ], array_map(static fn (RequestInterface $r): string => (string)$r->getUri(), $this->sent));
+    }
+
+    /**
+     * One purge per host, named after the first URL seen on it; URLs without
+     * a host contribute nothing.
+     */
+    #[Test]
+    public function queryVariantsArePurgedOncePerHost(): void
+    {
+        $lines = [];
+        PurgeAudit::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = json_decode($line, true);
+        });
+        putenv(PurgeAudit::ENV . '=1');
+        try {
+            $this->service()->invalidateQueryVariants([
+                'https://www.example.org/a',
+                'https://www.example.org/b',
+                'http://localhost:8080/c',
+                '/relative',
+            ]);
+        } finally {
+            putenv(PurgeAudit::ENV);
+            PurgeAudit::writeTo(null);
+        }
+
+        self::assertSame([
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/?.+=',
+            'http://localhost:2019/souin-api/souin/GET-localhost:8080-/?.+=',
+        ], array_map(static fn (RequestInterface $r): string => (string)$r->getUri(), $this->sent));
+        self::assertIsArray($lines[0]);
+        self::assertSame('https://www.example.org/a (query variants)', $lines[0]['ref']);
+    }
+
+    #[Test]
+    public function theHostOfAUrlKeepsItsPort(): void
+    {
+        self::assertSame('www.example.org', CaddyCacheService::hostOf('https://www.example.org/a?b=c'));
+        self::assertSame('localhost:8080', CaddyCacheService::hostOf('http://localhost:8080/'));
+        self::assertSame('', CaddyCacheService::hostOf('/relative'));
+    }
 }
