@@ -12,8 +12,6 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/../../Fixtures/KohAsyncDoubles.php';
-
 /**
  * When the edge purge leaves the request. Every "no" here must leave
  * TYPO3_CONF_VARS without a route, because a route is the only thing that
