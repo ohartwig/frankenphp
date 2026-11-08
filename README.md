@@ -86,6 +86,14 @@ Automatic invalidation via:
 
 What a save purges: the URLs of the page in its own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place); the core's siblings only when a menu or teaser field changed (title, slug, visibility, position, abstract, media and the like), otherwise the page and its parent; nothing for a save in a workspace (its publish purges); each page once per DataHandler run.
 
+**Where the purge is sent.** The listener resolves the URLs and dispatches them as one `PurgeEdgeCache` message per hook call; `PurgeEdgeCacheHandler` sends the PURGE requests. By default TYPO3 handles the message in the request, so an editor's save waits for the purges as it always did. With [koh/typo3-async](https://git.ole-hartwig.eu/ai-ready-platform/platform/typo3-async) the message can leave the request and be sent by its consumer instead, when all three hold:
+
+- the installed koh/typo3-async has the `koh_async_cache` transport (the first release after 1.4.8);
+- its async mode is on (`MESSENGER_ASYNC=1`, set by the platform together with the consumer);
+- `KOH_ASYNC_EDGE_PURGE=1` on the pods editors save from.
+
+Switch it on per installation, and only after its consumer reads the queue (`messenger:consume … koh_async_cache`); a queue nobody reads keeps the purges and the edge stays stale. The message class is put on koh_async's `messageClassPrefixes` whenever the transport exists, so the consumer decodes it whatever its own switches say. With `KOH_CACHE_PURGE_AUDIT=1` the audit line written in the consumer still names the request and backend user that asked, and adds `handled_by` for the consumer. Full flushes (`all`/`pages`, `CacheFlushEvent`) and file purges stay in the request.
+
 An optional API key is sent in the `X-API-Key` header.
 
 ## Installation

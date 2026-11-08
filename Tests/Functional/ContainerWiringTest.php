@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace Koh\FrankenPHP\Tests\Functional;
 
+use Koh\FrankenPHP\Message\PurgeEdgeCache;
+use Koh\FrankenPHP\MessageHandler\PurgeEdgeCacheHandler;
 use PHPUnit\Framework\Attributes\Test;
+use Symfony\Component\Messenger\MessageBusInterface;
+use Symfony\Component\Messenger\Stamp\HandledStamp;
 use Symfony\Component\Yaml\Yaml;
 use TYPO3\CMS\Core\Cache\CacheManager;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
@@ -30,6 +34,24 @@ final class ContainerWiringTest extends FunctionalTestCase
         // is typed, so asserting its type can never fail. Finding a core
         // service says the container was built and answers.
         self::assertTrue($this->getContainer()->has(CacheManager::class));
+    }
+
+    /**
+     * The edge purge is a message now. Without koh/typo3-async it has no
+     * route of its own, so TYPO3's default routing handles it in the request
+     * -- through the handler the attribute registers, or not at all.
+     */
+    #[Test]
+    public function aPurgeMessageIsHandledInTheRequestWithoutKohAsync(): void
+    {
+        self::assertArrayNotHasKey(PurgeEdgeCache::class, $GLOBALS['TYPO3_CONF_VARS']['SYS']['messenger']['routing'] ?? []);
+
+        $envelope = $this->get(MessageBusInterface::class)->dispatch(new PurgeEdgeCache([]));
+
+        $handled = $envelope->all(HandledStamp::class);
+        self::assertCount(1, $handled);
+        self::assertInstanceOf(HandledStamp::class, $handled[0]);
+        self::assertStringContainsString(PurgeEdgeCacheHandler::class . "::__invoke", $handled[0]->getHandlerName());
     }
 
     /**

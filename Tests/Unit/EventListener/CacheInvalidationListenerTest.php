@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Koh\FrankenPHP\Tests\Unit\EventListener;
 
 use Koh\FrankenPHP\EventListener\CacheInvalidationListener;
+use Koh\FrankenPHP\Message\PurgeEdgeCache;
+use Koh\FrankenPHP\MessageHandler\PurgeEdgeCacheHandler;
 use Koh\FrankenPHP\Service\CaddyCacheService;
 use Koh\FrankenPHP\Service\PurgeAudit;
 use Koh\Dev\Testing\Typo3\DatabaseDoubles;
@@ -12,6 +14,8 @@ use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use Symfony\Component\Messenger\Envelope;
+use Symfony\Component\Messenger\MessageBusInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Cache\Event\CacheFlushEvent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
@@ -52,6 +56,12 @@ final class CacheInvalidationListenerTest extends TestCase
     private array $pageRow = [];
 
     private bool $enabled = true;
+
+    /** @var list<PurgeEdgeCache> what the listener dispatched, in order */
+    private array $dispatched = [];
+
+    /** Whether the bus double hands a message to the handler, like TYPO3's synchronous default routing. */
+    private bool $handleInline = true;
 
     private function listener(): CacheInvalidationListener
     {
@@ -94,7 +104,45 @@ final class CacheInvalidationListenerTest extends TestCase
             $service,
             new NullLogger(),
             $this->pool(),
+            $this->bus(new PurgeEdgeCacheHandler($service)),
         );
+    }
+
+    /**
+     * TYPO3's default routing in miniature: the message is handled where it
+     * is dispatched. Every purge assertion in this file therefore runs through
+     * message and handler, which is what keeps the synchronous path identical
+     * to the inline purges it replaced.
+     */
+    private function bus(PurgeEdgeCacheHandler $handler): MessageBusInterface
+    {
+        return new class ($this, $handler) implements MessageBusInterface {
+            public function __construct(
+                private readonly CacheInvalidationListenerTest $test,
+                private readonly PurgeEdgeCacheHandler $handler,
+            ) {}
+
+            public function dispatch(object $message, array $stamps = []): Envelope
+            {
+                \assert($message instanceof PurgeEdgeCache);
+                $this->test->dispatched($message);
+                if ($this->test->handlesInline()) {
+                    ($this->handler)($message);
+                }
+
+                return new Envelope($message, $stamps);
+            }
+        };
+    }
+
+    public function dispatched(PurgeEdgeCache $message): void
+    {
+        $this->dispatched[] = $message;
+    }
+
+    public function handlesInline(): bool
+    {
+        return $this->handleInline;
     }
 
     // --- the off switch -----------------------------------------------------
@@ -707,5 +755,97 @@ final class CacheInvalidationListenerTest extends TestCase
         $this->postProc(['tags' => ['pageId_0' => true, 'cachetag' => true]]);
 
         self::assertSame([], $this->queryVariantCalls);
+    }
+
+    // --- the message ---------------------------------------------------------
+
+    /**
+     * One message per purgePages() call, carrying every page's URLs as the
+     * service returned them and the hosts whose query variants are due. The
+     * listener sends nothing itself: with the message routed to the consumer,
+     * the request makes no HTTP call to the edge at all.
+     */
+    #[Test]
+    public function aRunDispatchesOneMessagePerCallAndSendsNothingItself(): void
+    {
+        $this->handleInline = false;
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->postProc(['tags' => ['pageId_501' => true, 'pageId_12' => true]], $dataHandler);
+        $this->postProc(['tags' => ['pageId_501' => true, 'pageId_13' => true]], $dataHandler);
+
+        self::assertSame([], array_values(array_filter($this->methods(), static fn (string $m): bool => $m !== 'getPageUrls')));
+        self::assertSame([], $this->queryVariantCalls);
+        self::assertCount(2, $this->dispatched);
+        self::assertSame([
+            ['https://www.example.org/page-501', 'https://en.example.org/page-501'],
+            ['https://www.example.org/page-12'],
+        ], $this->dispatched[0]->pageUrls);
+        self::assertSame(['https://www.example.org/page-501', 'https://en.example.org/page-501'], $this->dispatched[0]->queryVariantUrls);
+        self::assertSame([['https://www.example.org/page-13']], $this->dispatched[1]->pageUrls, 'page 501 was done in this run');
+        self::assertSame([], $this->dispatched[1]->queryVariantUrls, 'and so were its hosts');
+    }
+
+    #[Test]
+    public function nothingToPurgeNothingDispatched(): void
+    {
+        $this->postProc(['tags' => ['pageId_0' => true, 'cachetag' => true]]);
+        $dataHandler = $this->createStub(DataHandler::class);
+        $this->postProc(['tags' => ['pageId_12' => true]], $dataHandler);
+        $this->postProc(['tags' => ['pageId_12' => true]], $dataHandler);
+
+        self::assertCount(1, $this->dispatched, 'only the first call had a page to purge');
+    }
+
+    #[Test]
+    public function theMessageCarriesTheAuditContextOnlyWhileTheAuditIsOn(): void
+    {
+        $this->postProc(['tags' => ['pageId_12' => true]]);
+        self::assertNull($this->dispatched[0]->origin);
+
+        putenv(PurgeAudit::ENV . '=1');
+        PurgeAudit::writeTo(static function (string $line): void {});
+        try {
+            $this->postProc(['tags' => ['pageId_13' => true]]);
+        } finally {
+            putenv(PurgeAudit::ENV);
+            PurgeAudit::writeTo(null);
+        }
+
+        $origin = $this->dispatched[1]->origin;
+        self::assertIsArray($origin);
+        self::assertSame(PHP_SAPI, $origin['sapi']);
+        self::assertSame(CacheInvalidationListener::class . '::purgePages', $origin['caller'][0], 'the code path that asked, as an inline purge recorded it');
+    }
+
+    /**
+     * Synchronous handling writes the audit line an inline purge wrote: same
+     * context, no handled_by.
+     */
+    #[Test]
+    public function handledInTheRequestTheAuditLineIsUnchanged(): void
+    {
+        $lines = [];
+        putenv(PurgeAudit::ENV . '=1');
+        PurgeAudit::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = json_decode($line, true);
+        });
+        try {
+            $service = $this->createStub(CaddyCacheService::class);
+            $service->method('isEnabled')->willReturn(true);
+            $service->method('getPageUrls')->willReturn(['https://www.example.org/page-12']);
+            $service->method('invalidateUrls')->willReturnCallback(static function (): void {
+                PurgeAudit::record('purge', ['key' => 'k']);
+            });
+            $listener = new CacheInvalidationListener($service, new NullLogger(), $this->pool(), $this->bus(new PurgeEdgeCacheHandler($service)));
+            $listener->clearCachePostProc(['tags' => ['pageId_12' => true]], $this->createStub(DataHandler::class));
+        } finally {
+            putenv(PurgeAudit::ENV);
+            PurgeAudit::writeTo(null);
+        }
+
+        self::assertCount(1, $lines);
+        self::assertArrayNotHasKey('handled_by', $lines[0]);
+        self::assertSame(CacheInvalidationListener::class . '::purgePages', $lines[0]['caller'][0]);
     }
 }
