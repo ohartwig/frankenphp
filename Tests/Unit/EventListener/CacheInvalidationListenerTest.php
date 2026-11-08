@@ -6,6 +6,7 @@ namespace Koh\FrankenPHP\Tests\Unit\EventListener;
 
 use Koh\FrankenPHP\EventListener\CacheInvalidationListener;
 use Koh\FrankenPHP\Service\CaddyCacheService;
+use Koh\FrankenPHP\Service\PurgeAudit;
 use Koh\Dev\Testing\Typo3\DatabaseDoubles;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -366,5 +367,52 @@ final class CacheInvalidationListenerTest extends TestCase
 
             self::assertSame([], $this->calls, $table);
         }
+    }
+
+    // --- purge audit ---------------------------------------------------------
+
+    /**
+     * With the audit switched on, a scheduled full flush says why it was
+     * scheduled: the flush itself runs at shutdown, where the cause is gone.
+     */
+    #[Test]
+    public function aScheduledFullFlushRecordsItsReason(): void
+    {
+        $lines = [];
+        PurgeAudit::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = json_decode($line, true);
+        });
+        putenv(PurgeAudit::ENV . '=1');
+        try {
+            $this->listener()->onGeneralCacheFlush(new CacheFlushEvent(['pages', 'system']));
+            $this->postProc(['cacheCmd' => 'ALL']);
+            $this->postProc(['tags' => ['pageId_12' => true]]);
+        } finally {
+            putenv(PurgeAudit::ENV);
+            PurgeAudit::writeTo(null);
+        }
+
+        $reasons = array_column(array_filter($lines, static fn (mixed $l): bool => is_array($l) && ($l['koh_purge_audit'] ?? '') === 'full-flush-scheduled'), 'reason');
+        self::assertSame(['CacheFlushEvent groups=pages,system', 'clear_cacheCmd=all'], $reasons);
+    }
+
+    #[Test]
+    public function aDisabledListenerRecordsNothing(): void
+    {
+        $this->enabled = false;
+        $lines = [];
+        PurgeAudit::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = $line;
+        });
+        putenv(PurgeAudit::ENV . '=1');
+        try {
+            $this->listener()->onGeneralCacheFlush(new CacheFlushEvent(['all']));
+            $this->postProc(['cacheCmd' => 'pages']);
+        } finally {
+            putenv(PurgeAudit::ENV);
+            PurgeAudit::writeTo(null);
+        }
+
+        self::assertSame([], $lines);
     }
 }

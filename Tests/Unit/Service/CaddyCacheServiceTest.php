@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Koh\FrankenPHP\Tests\Unit\Service;
 
 use Koh\FrankenPHP\Service\CaddyCacheService;
+use Koh\FrankenPHP\Service\PurgeAudit;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
@@ -715,5 +716,37 @@ final class CaddyCacheServiceTest extends TestCase
         $this->service()->flushAll();
 
         self::assertSame($withLogging, (string)$this->only()->getUri());
+    }
+
+    /**
+     * With the audit switched on, every purge leaves a line naming its Souin
+     * key; switched off (the default) there is none.
+     */
+    #[Test]
+    public function aPurgeIsRecordedWhenTheAuditIsOn(): void
+    {
+        $lines = [];
+        PurgeAudit::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = json_decode($line, true);
+        });
+        try {
+            $this->service()->invalidateUrls(['https://www.example.org/a']);
+            self::assertSame([], $lines, 'off by default');
+
+            putenv(PurgeAudit::ENV . '=1');
+            $this->service()->invalidateUrls(['https://www.example.org/a']);
+            $this->service()->flushAll();
+        } finally {
+            putenv(PurgeAudit::ENV);
+            PurgeAudit::writeTo(null);
+        }
+
+        self::assertCount(2, $lines);
+        self::assertIsArray($lines[0]);
+        self::assertSame('purge', $lines[0]['koh_purge_audit']);
+        self::assertSame('GET-www.example.org-/a', $lines[0]['key']);
+        self::assertIsArray($lines[1]);
+        self::assertSame('.+', $lines[1]['key']);
+        self::assertSame('*', $lines[1]['ref']);
     }
 }

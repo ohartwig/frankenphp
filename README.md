@@ -166,6 +166,17 @@ PSR-3 logger via TYPO3:
 - **Error** — exceptions during invalidation
 - **Debug** — request/response details (only with `enableDebugLogging`)
 
+### Purge audit
+
+`KOH_CACHE_PURGE_AUDIT=1` in the environment writes one JSON line per edge
+cache purge to stderr (`"koh_purge_audit":"purge"`), plus one when a full
+flush is scheduled (`"full-flush-scheduled"`, with the reason: the
+`CacheFlushEvent` groups or the `clear_cacheCmd`). Each line carries the
+Souin key, the request (method, host, path, user agent) or CLI command, the
+backend user and workspace, and the calling code path. It is meant for a
+measurement window, to find out what keeps emptying the edge cache; without
+the variable nothing is written.
+
 ## Backend module
 
 "Admin Tools → Caddy Cache Management":
