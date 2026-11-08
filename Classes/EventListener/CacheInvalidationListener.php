@@ -22,6 +22,14 @@ class CacheInvalidationListener
     private static ?\WeakMap $purgedPerDataHandler = null;
 
     /**
+     * Hosts whose query-string variants were purged in a DataHandler run. See
+     * purgePages().
+     *
+     * @var \WeakMap<DataHandler, array<string, true>>|null
+     */
+    private static ?\WeakMap $queryVariantHostsPerDataHandler = null;
+
+    /**
      * Fields each page record changed in a DataHandler run, by uid. See
      * edgePagesForPageRecord().
      *
@@ -172,30 +180,47 @@ class CacheInvalidationListener
     /**
      * Purge the URLs of these pages, each at most once per DataHandler run: a
      * save that touches five records on one page, or reaches this through both
-     * hooks, purges it once. A WeakMap rather than a plain static because a
-     * worker process outlives the request, and entries die with their
-     * DataHandler.
+     * hooks, purges it once. The query-string variants of a host go once per
+     * run as well, however many pages on it were purged. WeakMaps rather than
+     * plain statics because a worker process outlives the request, and entries
+     * die with their DataHandler.
      *
      * @param list<int> $pageIds
      */
     private function purgePages(array $pageIds, DataHandler $dataHandler): void
     {
         self::$purgedPerDataHandler ??= new \WeakMap();
+        self::$queryVariantHostsPerDataHandler ??= new \WeakMap();
         /** @var array<int, true> $done */
         $done = self::$purgedPerDataHandler[$dataHandler] ?? [];
+        /** @var array<string, true> $hostsDone */
+        $hostsDone = self::$queryVariantHostsPerDataHandler[$dataHandler] ?? [];
 
+        $newHosts = [];
         foreach ($pageIds as $pageId) {
             if ($pageId <= 0 || isset($done[$pageId])) {
                 continue;
             }
             $done[$pageId] = true;
             $urls = $this->caddyCacheService->getPageUrls($pageId);
-            if ($urls !== []) {
-                $this->caddyCacheService->invalidateUrls($urls);
+            if ($urls === []) {
+                continue;
             }
+            $this->caddyCacheService->invalidateUrls($urls, false);
+            foreach ($urls as $url) {
+                $host = CaddyCacheService::hostOf($url);
+                if (!isset($hostsDone[$host])) {
+                    $hostsDone[$host] = true;
+                    $newHosts[] = $url;
+                }
+            }
+        }
+        if ($newHosts !== []) {
+            $this->caddyCacheService->invalidateQueryVariants($newHosts);
         }
 
         self::$purgedPerDataHandler[$dataHandler] = $done;
+        self::$queryVariantHostsPerDataHandler[$dataHandler] = $hostsDone;
     }
 
     private function deferFullFlush(string $reason): void
