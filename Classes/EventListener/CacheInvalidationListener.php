@@ -21,6 +21,26 @@ class CacheInvalidationListener
      */
     private static ?\WeakMap $purgedPerDataHandler = null;
 
+    /**
+     * Fields each page record changed in a DataHandler run, by uid. See
+     * edgePagesForPageRecord().
+     *
+     * @var \WeakMap<DataHandler, array<int, list<string>>>|null
+     */
+    private static ?\WeakMap $changedPageFields = null;
+
+    /**
+     * Page fields a menu, breadcrumb or teaser on another page may show, or
+     * that decide whether the page appears there at all. A change to any of
+     * them keeps the core's sibling purge at the edge.
+     */
+    private const MENU_FIELDS = [
+        'title', 'nav_title', 'subtitle', 'abstract', 'media', 'slug', 'sorting', 'pid',
+        'hidden', 'nav_hide', 'starttime', 'endtime', 'fe_group', 'doktype',
+        'shortcut', 'shortcut_mode', 'url', 'target', 'l18n_cfg', 'extendToSubpages',
+        'categories', 'lastUpdated',
+    ];
+
     public function __construct(
         private readonly CaddyCacheService $caddyCacheService,
         private readonly LoggerInterface $logger,
@@ -50,15 +70,6 @@ class CacheInvalidationListener
     }
 
     /**
-     * DataHandler hook: called after a record has been inserted or updated.
-     *
-     * @param string $status 'new' or 'update'
-     * @param string $table Database table name
-     * @param string|int $id Record UID (may be a temporary "NEW…" string for new records)
-     * @param array<string, mixed> $fieldArray Changed fields
-     * @param DataHandler $dataHandler
-     */
-    /**
      * DataHandler hook clearCachePostProc -- the one path every editorial
      * change takes, whatever form it has.
      *
@@ -80,10 +91,8 @@ class CacheInvalidationListener
      *
      * 'all' and 'pages' become a deferred full flush (same reason as the event
      * handler: no outgoing HTTP during container teardown in worker mode).
-     * Everything else purges the URLs of the tagged pages. The per-DataHandler
-     * WeakMap keeps a save that touches five records from purging the same page
-     * five times; a WeakMap rather than a plain static because a worker
-     * process outlives the request, and entries die with their DataHandler.
+     * Everything else purges the URLs of the tagged pages, with one exception:
+     * see edgePagesForPageRecord().
      *
      * @param array<string, mixed> $params
      */
@@ -96,6 +105,13 @@ class CacheInvalidationListener
         $cacheCmd = strtolower((string)($params['cacheCmd'] ?? ''));
         if ($cacheCmd === 'all' || $cacheCmd === 'pages') {
             $this->deferFullFlush('clear_cacheCmd=' . $cacheCmd);
+
+            return;
+        }
+        // prepareCacheFlush() for a record the core leaves alone: a workspace
+        // version, or a page tree with TCEMAIN.clearCache_disable. The live
+        // pages did not change, so neither does the edge.
+        if (($params['clearCacheEnabled'] ?? true) === false) {
             return;
         }
 
@@ -110,11 +126,65 @@ class CacheInvalidationListener
             $pageIds[(int)$params['uid_page']] = true;
         }
 
+        if (($params['table'] ?? null) === 'pages') {
+            $this->purgePages($this->edgePagesForPageRecord($params, $pageIds, $dataHandler), $dataHandler);
+
+            return;
+        }
+
+        $this->purgePages(array_keys($pageIds), $dataHandler);
+    }
+
+    /**
+     * For a saved page record the core flushes the page, its parent and every
+     * sibling, because any of them may show the page in a menu. Our own page
+     * cache keeps doing that; the edge only follows when the save changed
+     * something a menu or a teaser shows. Otherwise it purges the page and its
+     * parent, which lists it. On the blog tree that is 2 pages instead of 170
+     * for each saved SEO field.
+     *
+     * Only a save processDatamap_afterDatabaseOperations() has seen counts as
+     * known. A move, delete, publish or new page arrives here without one and
+     * keeps the siblings.
+     *
+     * @param array<string, mixed> $params
+     * @param array<int, true>     $pageIds
+     *
+     * @return list<int>
+     */
+    private function edgePagesForPageRecord(array $params, array $pageIds, DataHandler $dataHandler): array
+    {
+        $pageUid = (int)($params['uid_page'] ?? 0);
+        $changed = (self::$changedPageFields[$dataHandler] ?? [])[(int)($params['uid'] ?? 0)] ?? null;
+        if ($changed === null || array_intersect($changed, self::MENU_FIELDS) !== []) {
+            return array_keys($pageIds);
+        }
+
+        $narrowed = [$pageUid];
+        $parent = (int)($this->pageRow($pageUid)['pid'] ?? 0);
+        if (isset($pageIds[$parent])) {
+            $narrowed[] = $parent;
+        }
+
+        return $narrowed;
+    }
+
+    /**
+     * Purge the URLs of these pages, each at most once per DataHandler run: a
+     * save that touches five records on one page, or reaches this through both
+     * hooks, purges it once. A WeakMap rather than a plain static because a
+     * worker process outlives the request, and entries die with their
+     * DataHandler.
+     *
+     * @param list<int> $pageIds
+     */
+    private function purgePages(array $pageIds, DataHandler $dataHandler): void
+    {
         self::$purgedPerDataHandler ??= new \WeakMap();
         /** @var array<int, true> $done */
         $done = self::$purgedPerDataHandler[$dataHandler] ?? [];
 
-        foreach (array_keys($pageIds) as $pageId) {
+        foreach ($pageIds as $pageId) {
             if ($pageId <= 0 || isset($done[$pageId])) {
                 continue;
             }
@@ -148,6 +218,9 @@ class CacheInvalidationListener
      * DataHandler hook processDatamapClass: direct record saves only. Everything
      * else (publish, move, delete, clearCacheCmd) arrives via clearCachePostProc().
      *
+     * Runs before the core flushes caches for the save, so it is also where
+     * clearCachePostProc() learns which fields of a page record changed.
+     *
      * @param array<string, mixed> $fieldArray
      */
     public function processDatamap_afterDatabaseOperations(
@@ -161,109 +234,68 @@ class CacheInvalidationListener
             return;
         }
 
-        // Handle page updates
+        // A new record still has its "NEW…" placeholder here, which is 0 as a
+        // uid: nothing to purge or remember. Its flush hook call, with the
+        // real uid, purges the pages that will list it.
+        $uid = (int)$id;
         if ($table === 'pages') {
-            $this->handlePageUpdate((int)$id, $fieldArray);
+            self::$changedPageFields ??= new \WeakMap();
+            $known = self::$changedPageFields[$dataHandler] ?? [];
+            $known[$uid] = [...$known[$uid] ?? [], ...array_keys($fieldArray)];
+            self::$changedPageFields[$dataHandler] = $known;
         }
 
-        // Handle content element updates
-        if ($table === 'tt_content') {
-            $this->handleContentUpdate((int)$id, $fieldArray);
+        if (!$this->isLive($dataHandler)) {
+            return;
         }
 
-        // Handle other relevant table updates
-        if (in_array($table, ['sys_file', 'sys_file_reference', 'fe_users', 'fe_groups'], true)) {
-            $this->handleRelatedUpdate($table, (int)$id, $fieldArray);
+        if ($table === 'pages') {
+            $this->purgePages([$this->defaultLanguagePageId($uid)], $dataHandler);
+        } elseif ($table === 'tt_content') {
+            $this->purgePages([$this->getPageIdFromContentElement($uid)], $dataHandler);
         }
     }
 
     /**
-     * Handle page record updates
-     *
-     * @param array<string, mixed> $updatedFields Changed fields of the pages record
+     * A save in a workspace changes a version, not the live page the edge
+     * holds; its publish purges via clearCachePostProc().
      */
-    private function handlePageUpdate(int $pageId, array $updatedFields): void
+    private function isLive(DataHandler $dataHandler): bool
     {
-        $this->logger->info('Caddy Cache: Page updated', [
-            'pageId' => $pageId,
-            'updatedFields' => array_keys($updatedFields)
-        ]);
-
-        // Get all URLs for this page
-        $urls = $this->caddyCacheService->getPageUrls($pageId);
-
-        if ($urls !== []) {
-            $this->caddyCacheService->invalidateUrls($urls);
-        }
-
-        // Also invalidate parent pages if menu structure might be affected
-        if (isset($updatedFields['nav_title']) ||
-            isset($updatedFields['title']) ||
-            isset($updatedFields['nav_hide']) ||
-            isset($updatedFields['hidden'])) {
-
-            $this->invalidateNavigationCache($pageId);
-        }
+        // BE_USER is unset on a DataHandler that was never started (some CLI
+        // paths); without a user there is no workspace either.
+        return !isset($dataHandler->BE_USER) || $dataHandler->BE_USER->workspace === 0;
     }
 
+    private function defaultLanguagePageId(int $pageId): int
+    {
+        $parent = (int)($this->pageRow($pageId)['l10n_parent'] ?? 0);
+
+        return $parent === 0 ? $pageId : $parent;
+    }
+
+
     /**
-     * Handle content element updates
-     *
-     * @param array<string, mixed> $updatedFields Changed fields of the tt_content record
+     * @return array<string, mixed>
      */
-    private function handleContentUpdate(int $contentId, array $updatedFields): void
+    private function pageRow(int $pageId): array
     {
-        // Get the page this content belongs to
-        $pageId = $this->getPageIdFromContentElement($contentId);
+        $queryBuilder = $this->connectionPool->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+        $row = $queryBuilder
+            ->select('pid', 'l10n_parent')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, ParameterType::INTEGER))
+            )
+            ->executeQuery()
+            ->fetchAssociative();
 
-        if ($pageId > 0) {
-            $this->logger->info('Caddy Cache: Content updated', [
-                'contentId' => $contentId,
-                'pageId' => $pageId,
-                'updatedFields' => array_keys($updatedFields)
-            ]);
-
-            $urls = $this->caddyCacheService->getPageUrls($pageId);
-
-            if ($urls !== []) {
-                $this->caddyCacheService->invalidateUrls($urls);
-            }
-        }
+        return is_array($row) ? $row : [];
     }
 
     /**
-     * Handle updates to related records that might affect cache
-     *
-     * @param array<string, mixed> $updatedFields Changed fields of the related record
-     */
-    private function handleRelatedUpdate(string $table, int $recordId, array $updatedFields): void
-    {
-        $this->logger->info('Caddy Cache: Related record updated', [
-            'table' => $table,
-            'recordId' => $recordId,
-            'updatedFields' => array_keys($updatedFields)
-        ]);
-
-        // For file and user updates, we might want to invalidate more broadly
-        // depending on how they're used across the site
-        if ($table === 'sys_file' || $table === 'sys_file_reference') {
-            // Could implement more specific logic here based on file usage
-            $this->caddyCacheService->invalidateByTags(['file:' . $recordId]);
-        }
-    }
-
-    /**
-     * Invalidate navigation cache for parent pages
-     */
-    private function invalidateNavigationCache(int $pageId): void
-    {
-        // This could be extended to walk up the page tree and invalidate
-        // parent pages that might show this page in their navigation
-        $this->caddyCacheService->invalidateByTags(['navigation', 'pageId_' . $pageId]);
-    }
-
-    /**
-     * Get page ID from content element
+     * Get page ID from content element.
      */
     private function getPageIdFromContentElement(int $contentId): int
     {
