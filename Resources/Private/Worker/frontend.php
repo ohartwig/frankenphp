@@ -12,6 +12,11 @@ declare(strict_types=1);
  *   TYPO3_BACKEND_ENTRYPOINT  Backend entry point path or URL (default: /typo3)
  *   MAX_REQUESTS              Requests per worker lifecycle    (default: 500)
  *   TYPO3_AUTOLOAD_PATH       Path to vendor/autoload.php     (auto-detected)
+ *   DB_REUSE                  Keep database connections between requests (default: 1)
+ *   DB_REUSE_IDLE_TIMEOUT     Seconds a kept connection may sit idle      (default: 60)
+ *   DB_REUSE_MAX_AGE          Seconds a connection is kept at most        (default: 600)
+ *   DB_REUSE_MAX_REQUESTS     Requests a connection serves at most        (default: 1000)
+ *   DB_REUSE_LIVENESS_CHECK   SELECT 1 before reusing a connection        (default: 1)
  */
 
 if (!($_SERVER['FRANKENPHP_WORKER'] ?? false)) {
@@ -29,6 +34,7 @@ $autoloadPath = $_ENV['TYPO3_AUTOLOAD_PATH']
 
 require $autoloadPath;
 
+use Koh\FrankenPHP\Runtime\DatabaseConnectionReuse;
 use Koh\FrankenPHP\Runtime\FrontendWorker;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
 
@@ -39,5 +45,8 @@ $backendEntryPoint = $_ENV['TYPO3_BACKEND_ENTRYPOINT']
 $maxRequests = (int) ($_ENV['MAX_REQUESTS'] ?? 500);
 
 $classifier = new RequestClassifier($backendEntryPoint);
-$worker = new FrontendWorker($classifier, $autoloadPath);
+// Settings may come from the worker's `env` lines in the Caddyfile or from the
+// container environment; $_ENV is empty when variables_order lacks E.
+$connections = DatabaseConnectionReuse::fromEnvironment($_ENV + $_SERVER + getenv());
+$worker = new FrontendWorker($classifier, $autoloadPath, $connections);
 $worker->run($maxRequests);
