@@ -8,8 +8,12 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Log\LoggerInterface;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\Connection;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Exception\SiteNotFoundException;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Site\SiteFinder;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Cache invalidation service for Caddy/Souin.
@@ -45,13 +49,17 @@ class CaddyCacheService
     private readonly string $tlsCaBundle;
     private readonly bool $tlsVerify;
 
+    private readonly ConnectionPool $connectionPool;
+
     public function __construct(
         private readonly LoggerInterface $logger,
         ClientInterface $sharedHttpClient,
         private readonly SiteFinder $siteFinder,
         private readonly RequestFactoryInterface $requestFactory,
         ExtensionConfiguration $extensionConfiguration,
+        ?ConnectionPool $connectionPool = null,
     ) {
+        $this->connectionPool = $connectionPool ?? GeneralUtility::makeInstance(ConnectionPool::class);
         // Extension configuration is stored as strings ('0'/'1' for the boolean options), so
         // every setting is normalised to the type this service actually uses instead of being
         // kept in an untyped bag and coerced again at each read site.
@@ -147,12 +155,25 @@ class CaddyCacheService
     }
 
     /**
+     * Purge each URL by its exact Souin key, then the query-string variants
+     * ("/?utm_source=…") of every host involved, once per host and call. See
+     * souinKeyForUrl() for why both are needed and why they cannot be one key.
+     *
      * @param list<string> $urls
      */
     public function invalidateUrls(array $urls): void
     {
-        foreach ($urls as $url) {
+        $hosts = [];
+        foreach (array_unique($urls) as $url) {
             $this->sendPurgeToProxy($url);
+            $host = self::hostOf($url);
+            if ($host !== '') {
+                $hosts[$host] = $url;
+            }
+        }
+        $target = rtrim($this->buildApiUrl(), '/');
+        foreach ($hosts as $host => $url) {
+            $this->purgeViaApi($target . '/GET-' . self::souinLiteral($host) . '-/?.+=', [], $url . ' (query variants)');
         }
     }
 
@@ -229,8 +250,13 @@ class CaddyCacheService
     /**
      * Purge the public paths of fileadmin files (and their processed variants) on every
      * site host. Files cannot be purged by tag -- nothing emits Surrogate-Key -- so each
-     * path is purged by its Souin key "GET-<host>-<path>". Souin evaluates the key as a
-     * regex, hence the quoting: a file name is a literal, not a pattern.
+     * path is purged by its Souin key "GET-<host>-<path>", anchored at the end so that
+     * a.pdf does not also take a.pdf.zip with it (see souinKeyForUrl()).
+     *
+     * Until 2026-11-08 the path went through preg_quote(). The HTTP client
+     * percent-encodes the backslashes that adds, Souin does not decode them,
+     * and the key matched nothing: every file purge answered 204 and left the
+     * file at the edge.
      *
      * @param list<string> $paths Absolute public paths, e.g. "/fileadmin/a/b.pdf"
      */
@@ -253,7 +279,7 @@ class CaddyCacheService
         $target = rtrim($this->buildApiUrl(), '/');
         foreach (array_keys($hosts) as $host) {
             foreach (array_unique($paths) as $path) {
-                $key = 'GET-' . preg_quote($host, '/') . '-' . preg_quote($path, '/');
+                $key = 'GET-' . self::souinLiteral($host) . '-' . self::souinLiteral(rawurldecode($path)) . '$';
                 $this->purgeViaApi($target . '/' . $key, [], $path);
             }
         }
@@ -293,34 +319,113 @@ class CaddyCacheService
     }
 
     /**
+     * The public URLs of a page: one per enabled language of the page's own site
+     * in which the page exists.
+     *
+     * Built from the live page records themselves, hidden and deleted ones
+     * included: a page that was just hidden or deleted is exactly the one whose
+     * cached copy has to go. Asking the router with the bare page id instead
+     * answered for such a page -- and for a language without a translation --
+     * with the site base, so every save of a hidden page purged the start page
+     * (and, before keys were anchored, the whole host). A language without a
+     * translation only gets a URL when it falls back to the default language,
+     * because only then does it render the page.
+     *
      * @return list<string>
      */
     public function getPageUrls(int $pageId): array
     {
+        try {
+            $site = $this->siteFinder->getSiteByPageId($pageId);
+        } catch (SiteNotFoundException) {
+            return [];
+        }
+        try {
+            $records = $this->liveRecordsByLanguage($pageId);
+        } catch (\Throwable $e) {
+            $this->logUrlFailure($pageId, $e);
+            $records = [];
+        }
+        $default = $records[0] ?? null;
+        if ($default === null) {
+            return [];
+        }
+
         $urls = [];
-        foreach ($this->siteFinder->getAllSites() as $site) {
+        foreach ($site->getLanguages() as $language) {
+            $languageId = $language->getLanguageId();
+            $record = $records[$languageId] ?? null;
+            if ($record === null) {
+                if ($language->getFallbackType() !== 'fallback') {
+                    continue;
+                }
+                $record = ['sys_language_uid' => $languageId, 'l10n_parent' => 0] + $default;
+            }
             try {
-                foreach ($site->getAllLanguages() as $language) {
-                    $uri = $site->getRouter()->generateUri($pageId, ['_language' => $language]);
-                    $urls[] = (string)$uri;
-                }
-            // \Throwable, not \Exception. Route generation reaches deep into
-            // core and fails with Errors as readily as with Exceptions — an
-            // ArgumentCountError out of RequestContextFactory is what surfaced
-            // this. The caller is processDatamap_afterDatabaseOperations, so
-            // anything escaping here stops an editor saving a page; catching
-            // half the failure modes made the guard look present while leaving
-            // the other half to take the request down.
+                $urls[] = (string)$site->getRouter()->generateUri($record, ['_language' => $language]);
+                // \Throwable, not \Exception. Route generation reaches deep into
+                // core and fails with Errors as readily as with Exceptions — an
+                // ArgumentCountError out of RequestContextFactory is what surfaced
+                // this. The caller is a DataHandler hook, so anything escaping here
+                // stops an editor saving a page.
             } catch (\Throwable $e) {
-                if ($this->enableDebugLogging) {
-                    $this->logger->warning('Caddy Cache: Could not generate URL', [
-                        'pageId' => $pageId,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+                $this->logUrlFailure($pageId, $e);
             }
         }
+
         return $urls;
+    }
+
+    /**
+     * Live page records (no workspace versions) for the page and its
+     * translations, by language, in the shape PageRouter::generateUri() takes
+     * as a ready page record: a translation carries the default page's uid and
+     * its own as _LOCALIZED_UID.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function liveRecordsByLanguage(int $pageId): array
+    {
+        $queryBuilder = $this->connectionPool->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll();
+        $rows = $queryBuilder
+            ->select('*')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->or(
+                    $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, Connection::PARAM_INT)),
+                    $queryBuilder->expr()->eq('l10n_parent', $queryBuilder->createNamedParameter($pageId, Connection::PARAM_INT)),
+                ),
+                $queryBuilder->expr()->eq('t3ver_wsid', $queryBuilder->createNamedParameter(0, Connection::PARAM_INT)),
+            )
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        $records = [];
+        foreach ($rows as $row) {
+            $languageId = (int)$row['sys_language_uid'];
+            if ($languageId === 0) {
+                if ((int)$row['uid'] === $pageId) {
+                    $records[0] = $row;
+                }
+                continue;
+            }
+            $row['_LOCALIZED_UID'] = (int)$row['uid'];
+            $row['uid'] = $pageId;
+            $records[$languageId] = $row;
+        }
+
+        return $records;
+    }
+
+    private function logUrlFailure(int $pageId, \Throwable $e): void
+    {
+        if ($this->enableDebugLogging) {
+            $this->logger->warning('Caddy Cache: Could not generate URL', [
+                'pageId' => $pageId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -371,12 +476,48 @@ class CaddyCacheService
      * such PURGE with 204 and invalidated nothing, so the purge looked like it
      * worked in every log while the stale page stayed at the edge. Measured on
      * a customer site: "GET-host/" left the entry's Age untouched, "GET-host-/"
-     * dropped it. The path part is evaluated as a regex by the Souin API.
+     * dropped it.
+     *
+     * The key ends in "$". Souin's API compiles it into a regex and deletes
+     * every stored key it matches anywhere, plus every key it is a prefix of
+     * (Default storage, DeleteMany). Without the anchor "GET-host-/" deleted
+     * every entry of the host and "GET-host-/blog" everything below /blog and
+     * /blogger as well: one save of a hidden page, whose URL fell back to the
+     * site base, emptied the edge. Measured on the caddy-proxy image,
+     * 2026-11-08.
+     *
+     * The anchor also keeps "/blog?page=2" out, which invalidateUrls() purges
+     * per host with "GET-host-/?.+=": "/?" makes the slash optional (the "?"
+     * is not a literal here) and ".+=" needs a query, so only entries with a
+     * query string go. One key for both is not possible: a group or an escape
+     * needs "(", a backslash or "|", which TYPO3's Uri percent-encodes and Souin
+     * does not decode, so such a key matches nothing.
      */
     private function souinKeyForUrl(string $url): string
     {
         $parts = parse_url($url);
-        return 'GET-' . ($parts['host'] ?? '') . '-' . ($parts['path'] ?? '/');
+        $path = rawurldecode($parts['path'] ?? '/');
+
+        return 'GET-' . self::souinLiteral(self::hostOf($url)) . '-' . self::souinLiteral($path === '' ? '/' : $path) . '$';
+    }
+
+    private static function hostOf(string $url): string
+    {
+        $parts = parse_url($url);
+
+        return ($parts['host'] ?? '') . (isset($parts['port']) ? ':' . $parts['port'] : '');
+    }
+
+    /**
+     * A string as it may stand in a Souin key regex: letters, digits and the
+     * characters that are neither regex syntax nor percent-encoded by TYPO3's
+     * Uri stay; everything else becomes ".", one per character. "." is the
+     * only escape that survives the trip (see souinKeyForUrl()); it widens the
+     * key by one character, never by a page.
+     */
+    private static function souinLiteral(string $value): string
+    {
+        return (string)preg_replace('#[^A-Za-z0-9/_~:@&=,;.-]#u', '.', $value);
     }
 
     /**
@@ -424,6 +565,7 @@ class CaddyCacheService
                     'ref' => $ref,
                     'statusCode' => $status,
                 ]);
+
                 return false;
             }
 
@@ -474,6 +616,7 @@ class CaddyCacheService
 
             if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
                 $decoded = json_decode($body, true);
+
                 return is_array($decoded) ? $this->normalizeSouinKeys($decoded) : ($nullOnFailure ? null : []);
             }
         } catch (\Exception $e) {
@@ -488,6 +631,7 @@ class CaddyCacheService
 
     /**
      * @param array<array-key, mixed> $raw Decoded Souin admin API payload
+     *
      * @return list<string>
      */
     private function normalizeSouinKeys(array $raw): array

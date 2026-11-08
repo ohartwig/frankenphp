@@ -8,9 +8,11 @@ use Koh\FrankenPHP\EventListener\CacheInvalidationListener;
 use Koh\FrankenPHP\Service\CaddyCacheService;
 use Koh\FrankenPHP\Service\PurgeAudit;
 use Koh\Dev\Testing\Typo3\DatabaseDoubles;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
+use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Cache\Event\CacheFlushEvent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
@@ -30,6 +32,7 @@ use TYPO3\CMS\Core\DataHandling\DataHandler;
  * synchronously, because "it happened later" is exactly the property that
  * matters.
  */
+#[AllowMockObjectsWithoutExpectations]
 final class CacheInvalidationListenerTest extends TestCase
 {
     use DatabaseDoubles;
@@ -38,6 +41,9 @@ final class CacheInvalidationListenerTest extends TestCase
     private array $calls = [];
 
     private int $contentPid = 0;
+
+    /** @var array<string, mixed> The pages row (pid, l10n_parent) the listener looks up. */
+    private array $pageRow = [];
 
     private bool $enabled = true;
 
@@ -99,7 +105,9 @@ final class CacheInvalidationListenerTest extends TestCase
     {
         $pool = $this->createStub(ConnectionPool::class);
         $pool->method('getQueryBuilderForTable')->willReturnCallback(
-            fn (): object => $this->dbQueryBuilder($this->contentPid > 0 ? [['pid' => $this->contentPid]] : []),
+            fn (string $table): object => $table === 'pages'
+                ? $this->dbQueryBuilder($this->pageRow !== [] ? [$this->pageRow] : [])
+                : $this->dbQueryBuilder($this->contentPid > 0 ? [['pid' => $this->contentPid]] : []),
         );
 
         return $pool;
@@ -111,15 +119,43 @@ final class CacheInvalidationListenerTest extends TestCase
         return array_column($this->calls, 'method');
     }
 
-    private function save(string $table, int|string $id, array $fields = []): void
+    private function save(string $table, int|string $id, array $fields = [], ?DataHandler $dataHandler = null): void
     {
         $this->listener()->processDatamap_afterDatabaseOperations(
             'update',
             $table,
             $id,
             $fields,
-            $this->createStub(DataHandler::class),
+            $dataHandler ?? $this->createStub(DataHandler::class),
         );
+    }
+
+    /** @return list<int> the page ids whose URLs were looked up, in order */
+    private function purgedPages(): array
+    {
+        return array_values(array_map(
+            static fn (array $call): int => (int)$call['argument'],
+            array_filter($this->calls, static fn (array $call): bool => $call['method'] === 'getPageUrls'),
+        ));
+    }
+
+    /**
+     * What prepareCacheFlush() hands over for a saved page record: the page
+     * (uid_page, default language), its parent and every sibling as tags.
+     *
+     * @return array<string, mixed>
+     */
+    private function pageFlush(int $uid, int $pageUid = 0): array
+    {
+        return [
+            'table' => 'pages',
+            'uid' => $uid,
+            'uid_page' => $pageUid > 0 ? $pageUid : $uid,
+            'TSConfig' => [],
+            'tags' => ['pageId_41' => true, 'pageId_42' => true, 'pageId_43' => true, 'pageId_10' => true, 'pages' => true],
+            'clearCacheCommands' => [],
+            'clearCacheEnabled' => true,
+        ];
     }
 
     // --- the DataHandler clearCachePostProc hook -----------------------------
@@ -258,21 +294,225 @@ final class CacheInvalidationListenerTest extends TestCase
     }
 
     /**
-     * A title or visibility change alters the menus on OTHER pages, which the
-     * page's own URLs do not cover. Missing this is the classic stale-navigation
-     * bug: the page is correct, every menu linking to it is not.
+     * The core flushes every sibling of a saved page, because any of them may
+     * show it in a menu. At the edge that was 170 pages for each saved SEO
+     * field on the blog tree. A save that changed nothing a menu or teaser
+     * shows purges the page and its parent, which lists it.
      */
     #[Test]
-    public function aChangeThatAltersMenusAlsoInvalidatesTheNavigation(): void
+    public function aPageSaveWithoutMenuChangesPurgesOnlyThePageAndItsParent(): void
     {
-        foreach (['title', 'nav_title', 'nav_hide', 'hidden'] as $field) {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('pages', 42, ['description' => 'x', 'seo_title' => 'y'], $dataHandler);
+        $this->postProc($this->pageFlush(42), $dataHandler);
+
+        self::assertSame([42, 10], $this->purgedPages());
+    }
+
+    /**
+     * A title, visibility, slug or position change alters the menus on OTHER
+     * pages, which the page's own URLs do not cover. Missing this is the
+     * classic stale-navigation bug: the page is correct, every menu linking to
+     * it is not. So these keep the core's siblings.
+     */
+    #[Test]
+    public function aChangeThatAltersMenusKeepsTheSiblings(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        foreach (['title', 'nav_title', 'nav_hide', 'hidden', 'slug', 'sorting', 'abstract', 'media', 'starttime', 'fe_group'] as $field) {
             $this->calls = [];
+            $dataHandler = $this->createStub(DataHandler::class);
 
-            $this->save('pages', 42, [$field => 'x']);
+            $this->save('pages', 42, ['description' => 'x', $field => 'y'], $dataHandler);
+            $this->postProc($this->pageFlush(42), $dataHandler);
 
-            self::assertContains('invalidateByTags', $this->methods(), $field);
-            self::assertSame(['navigation', 'pageId_42'], $this->calls[2]['argument'], $field);
+            self::assertSame([42, 41, 43, 10], $this->purgedPages(), $field);
         }
+    }
+
+    /**
+     * A move, delete, publish or new page reaches the hook without a save the
+     * listener has seen, so it cannot know what changed and keeps the siblings.
+     */
+    #[Test]
+    public function aPageChangeWithoutAKnownSaveKeepsTheSiblings(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+
+        $this->postProc($this->pageFlush(42));
+
+        self::assertSame([41, 42, 43, 10], $this->purgedPages());
+    }
+
+    /**
+     * A translated page record has its own uid; the core names the default
+     * page in uid_page, and that is what has URLs.
+     */
+    #[Test]
+    public function aTranslatedPageSaveAlsoPurgesOnlyThePageAndItsParent(): void
+    {
+        // As the database hands them over: strings.
+        $this->pageRow = ['pid' => '10', 'l10n_parent' => '42'];
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('pages', 142, ['description' => 'x'], $dataHandler);
+        $this->postProc($this->pageFlush(142, 42), $dataHandler);
+
+        self::assertSame([42, 10], $this->purgedPages());
+    }
+
+    /**
+     * A top-level page's parent is the tree root, which the core does not tag
+     * (pid 0 has no page cache): the page alone.
+     */
+    #[Test]
+    public function aParentTheCoreDidNotFlushIsNotAddedEither(): void
+    {
+        $this->pageRow = ['pid' => 7, 'l10n_parent' => 0];
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('pages', 42, ['description' => 'x'], $dataHandler);
+        $this->postProc($this->pageFlush(42), $dataHandler);
+
+        self::assertSame([42], $this->purgedPages());
+    }
+
+    /**
+     * A save in a workspace changes a version, not the live page the edge
+     * holds, and the core reports its flush as disabled. Neither purges; the
+     * publish does, via clearCachePostProc with the live tags.
+     */
+    #[Test]
+    public function aWorkspaceSaveLeavesTheEdgeAlone(): void
+    {
+        $this->contentPid = 7;
+        $backendUser = $this->createStub(BackendUserAuthentication::class);
+        $backendUser->workspace = 1;
+        $dataHandler = $this->createStub(DataHandler::class);
+        $dataHandler->BE_USER = $backendUser;
+
+        $this->save('pages', 42, ['title' => 'x'], $dataHandler);
+        $this->save('tt_content', 99, ['header' => 'x'], $dataHandler);
+        $this->postProc(['table' => 'tt_content', 'uid' => 99, 'uid_page' => 7, 'tags' => ['pageId_7' => true], 'clearCacheEnabled' => false], $dataHandler);
+
+        self::assertSame([], $this->calls);
+    }
+
+    /**
+     * Workspace 0 is live: a save there purges.
+     */
+    #[Test]
+    public function aLiveSaveByABackendUserPurges(): void
+    {
+        $backendUser = $this->createStub(BackendUserAuthentication::class);
+        $backendUser->workspace = 0;
+        $dataHandler = $this->createStub(DataHandler::class);
+        $dataHandler->BE_USER = $backendUser;
+
+        $this->save('pages', 42, ['description' => 'x'], $dataHandler);
+
+        self::assertSame([42], $this->purgedPages());
+    }
+
+    /**
+     * A version saved in a workspace and published in the same run: the save
+     * purged nothing, so narrowing must still purge the page itself, not only
+     * its parent.
+     */
+    #[Test]
+    public function aNarrowedFlushStillPurgesThePageItself(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $backendUser = $this->createStub(BackendUserAuthentication::class);
+        $backendUser->workspace = 3;
+        $dataHandler = $this->createStub(DataHandler::class);
+        $dataHandler->BE_USER = $backendUser;
+
+        $this->save('pages', 42, ['description' => 'x'], $dataHandler);
+        self::assertSame([], $this->calls);
+        $this->postProc($this->pageFlush(42), $dataHandler);
+
+        self::assertSame([42, 10], $this->purgedPages());
+    }
+
+    /**
+     * Two saves of one page in a run add up: a menu field in the first keeps
+     * the siblings although the second changed only an SEO field.
+     */
+    #[Test]
+    public function changedFieldsAddUpOverARun(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('pages', 42, ['title' => 'x'], $dataHandler);
+        $this->save('pages', 42, ['description' => 'y'], $dataHandler);
+        $this->postProc($this->pageFlush(42), $dataHandler);
+
+        self::assertSame([42, 41, 43, 10], $this->purgedPages());
+    }
+
+    /**
+     * Narrowing applies to page records only. A content element that happens
+     * to share its uid with a saved page keeps every page the core tagged.
+     */
+    #[Test]
+    public function aContentFlushIsNeverNarrowed(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $this->contentPid = 7;
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('pages', 99, ['description' => 'x'], $dataHandler);
+        $this->postProc(['table' => 'tt_content', 'uid' => 99, 'uid_page' => 7, 'tags' => ['pageId_7' => true, 'pageId_8' => true], 'clearCacheEnabled' => true], $dataHandler);
+
+        self::assertSame([99, 7, 8], $this->purgedPages());
+    }
+
+    /**
+     * A page whose record cannot be found has no parent to add, even where
+     * the core happens to have tagged page 1.
+     */
+    #[Test]
+    public function aPageWithoutARecordIsNarrowedToItself(): void
+    {
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('pages', 42, ['description' => 'x'], $dataHandler);
+        $flush = $this->pageFlush(42);
+        $flush['tags']['pageId_1'] = true;
+        $this->postProc($flush, $dataHandler);
+
+        self::assertSame([42], $this->purgedPages());
+    }
+
+    /**
+     * "all" is a full flush; it does not also purge the pages it lists.
+     */
+    #[Test]
+    public function aFullFlushCommandDoesNotAlsoPurgePages(): void
+    {
+        $this->postProc(['cacheCmd' => 'all', 'tags' => ['pageId_5' => true], 'uid_page' => 5]);
+
+        self::assertSame([], $this->calls);
+    }
+
+    /**
+     * The save hook purges the page and the flush hook names it again; within
+     * one DataHandler run it goes out once.
+     */
+    #[Test]
+    public function aPageSavedAndFlushedInOneRunIsPurgedOnce(): void
+    {
+        $this->contentPid = 7;
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->save('tt_content', 99, ['header' => 'x'], $dataHandler);
+        $this->postProc(['table' => 'tt_content', 'uid' => 99, 'uid_page' => 7, 'tags' => ['pageId_7' => true], 'clearCacheEnabled' => true], $dataHandler);
+
+        self::assertSame([7], $this->purgedPages());
     }
 
     #[Test]
@@ -285,16 +525,16 @@ final class CacheInvalidationListenerTest extends TestCase
 
     /**
      * A new record arrives with its temporary "NEW…" identifier. Casting that
-     * to int yields 0, and page 0 has no URLs — so nothing is invalidated,
-     * which is correct: the record does not exist at a URL yet.
+     * to int yields 0, which is not a page — so nothing is invalidated, which
+     * is correct: the record does not exist at a URL yet. Its flush hook call
+     * (with the real uid) purges the parent and siblings that will list it.
      */
     #[Test]
     public function aRecordThatIsStillNewInvalidatesNothing(): void
     {
         $this->save('pages', 'NEW64f1c0a2b3');
 
-        self::assertSame(['getPageUrls'], $this->methods());
-        self::assertSame(0, $this->calls[0]['argument']);
+        self::assertSame([], $this->calls);
     }
 
     // --- content saves ------------------------------------------------------
@@ -327,16 +567,20 @@ final class CacheInvalidationListenerTest extends TestCase
 
     // --- related records ----------------------------------------------------
 
+    /**
+     * File records used to be purged by a "file:<uid>" tag that nothing emits:
+     * each save asked Souin for its whole tag list and logged a warning. Files
+     * are FileCacheInvalidationListener's, by path; here they cost nothing.
+     */
     #[Test]
-    public function aFileChangeIsInvalidatedByTag(): void
+    public function aFileRecordChangeIsLeftToTheFileListener(): void
     {
         foreach (['sys_file', 'sys_file_reference'] as $table) {
             $this->calls = [];
 
             $this->save($table, 5);
 
-            self::assertSame(['invalidateByTags'], $this->methods(), $table);
-            self::assertSame(['file:5'], $this->calls[0]['argument'], $table);
+            self::assertSame([], $this->calls, $table);
         }
     }
 

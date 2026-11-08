@@ -6,6 +6,8 @@ namespace Koh\FrankenPHP\Tests\Unit\Service;
 
 use Koh\FrankenPHP\Service\CaddyCacheService;
 use Koh\FrankenPHP\Service\PurgeAudit;
+use Koh\Dev\Testing\Typo3\DatabaseDoubles;
+use PHPUnit\Framework\Attributes\AllowMockObjectsWithoutExpectations;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
@@ -15,10 +17,15 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LogLevel;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Exception\SiteNotFoundException;
 use TYPO3\CMS\Core\Http\Request;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\Stream;
+use TYPO3\CMS\Core\Http\Uri;
+use TYPO3\CMS\Core\Routing\RouterInterface;
 use TYPO3\CMS\Core\Site\Entity\Site;
+use TYPO3\CMS\Core\Site\Entity\SiteLanguage;
 use TYPO3\CMS\Core\Site\SiteFinder;
 
 /**
@@ -48,8 +55,11 @@ use TYPO3\CMS\Core\Site\SiteFinder;
  * exception escaping here would turn "the edge cache is unreachable" into "the
  * editor cannot save the page".
  */
+#[AllowMockObjectsWithoutExpectations]
 final class CaddyCacheServiceTest extends TestCase
 {
+    use DatabaseDoubles;
+
     /** @var list<RequestInterface> */
     private array $sent = [];
 
@@ -159,7 +169,7 @@ final class CaddyCacheServiceTest extends TestCase
     {
         $this->service()->invalidateUrls(['https://www.example.org/a-page']);
 
-        $request = $this->only();
+        $request = $this->sent[0];
         self::assertSame('PURGE', $request->getMethod());
         self::assertStringStartsWith('http://localhost:2019/souin-api/souin', (string)$request->getUri());
         self::assertStringNotContainsString('www.example.org/a-page', (string)$request->getUri()->getHost());
@@ -167,12 +177,15 @@ final class CaddyCacheServiceTest extends TestCase
 
     /**
      * AUD-062-F01: a file has no page URL and no tag, so it is purged by its
-     * Souin key per site host. Souin reads the key as a regex, so the file name
-     * is quoted: an unquoted dot would also match `aXpdf`, and an unquoted
-     * `(` or `+` would make the key invalid or match something else.
+     * Souin key per site host. Souin reads the key as a regex, but the key can
+     * carry no escapes: TYPO3's Uri percent-encodes the backslash and the
+     * brackets, Souin does not decode them, and the preg_quote()d key this
+     * test used to pin matched nothing at all (caddy-proxy image, 2026-11-08).
+     * Every character that is regex syntax or would be encoded becomes ".",
+     * and the key is anchored, so a.pdf does not take a.pdf.zip with it.
      */
     #[Test]
-    public function aFileIsPurgedByItsQuotedSouinKeyOnEverySiteHost(): void
+    public function aFileIsPurgedByItsAnchoredSouinKeyOnEverySiteHost(): void
     {
         $this->service(
             [],
@@ -184,10 +197,13 @@ final class CaddyCacheServiceTest extends TestCase
         self::assertSame('PURGE', $this->sent[0]->getMethod());
         self::assertStringStartsWith('http://localhost:2019/souin-api/souin/', (string)$this->sent[0]->getUri());
         self::assertSame(
-            'GET-www\.example\.org-\/fileadmin\/docs\/report \(1\)\+final\.pdf',
-            rawurldecode(substr($this->sent[0]->getUri()->getPath(), strlen('/souin-api/souin/'))),
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/fileadmin/docs/report..1..final.pdf$',
+            (string)$this->sent[0]->getUri(),
         );
-        self::assertStringContainsString('GET-other\.example\.org-', rawurldecode((string)$this->sent[1]->getUri()));
+        self::assertSame(
+            'http://localhost:2019/souin-api/souin/GET-other.example.org-/fileadmin/docs/report..1..final.pdf$',
+            (string)$this->sent[1]->getUri(),
+        );
     }
 
     #[Test]
@@ -209,7 +225,7 @@ final class CaddyCacheServiceTest extends TestCase
     {
         $this->service()->invalidateUrls(['https://www.example.org/a/page']);
 
-        self::assertStringEndsWith('/GET-www.example.org-/a/page', (string)$this->only()->getUri());
+        self::assertStringEndsWith('/GET-www.example.org-/a/page$', (string)$this->sent[0]->getUri());
     }
 
     #[Test]
@@ -217,18 +233,70 @@ final class CaddyCacheServiceTest extends TestCase
     {
         $this->service()->invalidateUrls(['https://www.example.org']);
 
-        self::assertStringEndsWith('/GET-www.example.org-/', (string)$this->only()->getUri());
+        self::assertStringEndsWith('/GET-www.example.org-/$', (string)$this->sent[0]->getUri());
     }
 
+    /**
+     * Souin deletes every key the purge key matches anywhere, and every key it
+     * is a prefix of. Without the "$", the start page's key "GET-host-/"
+     * deleted every entry of the host, and "/blog" everything below it.
+     */
     #[Test]
-    public function everyUrlGetsItsOwnPurge(): void
+    public function thePerUrlKeyIsAnchoredSoItDoesNotTakeOtherPagesWithIt(): void
+    {
+        $this->service()->invalidateUrls(['https://www.example.org/', 'https://www.example.org/blog']);
+
+        self::assertSame('/souin-api/souin/GET-www.example.org-/$', $this->sent[0]->getUri()->getPath());
+        self::assertSame('/souin-api/souin/GET-www.example.org-/blog$', $this->sent[1]->getUri()->getPath());
+    }
+
+    /**
+     * Each URL gets its own exact key, and every host involved one more purge
+     * for its query-string variants: "/?" makes the slash optional, ".+="
+     * needs a query. Two hosts, two of those; a URL given twice, one purge.
+     */
+    #[Test]
+    public function everyUrlGetsItsOwnPurgeAndEveryHostOneForItsQueryVariants(): void
     {
         $this->service()->invalidateUrls([
             'https://www.example.org/a',
             'https://www.example.org/b',
+            'https://www.example.org/a',
+            'https://en.example.org/a',
         ]);
 
-        self::assertCount(2, $this->sent);
+        self::assertSame([
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/a$',
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/b$',
+            'http://localhost:2019/souin-api/souin/GET-en.example.org-/a$',
+            'http://localhost:2019/souin-api/souin/GET-www.example.org-/?.+=',
+            'http://localhost:2019/souin-api/souin/GET-en.example.org-/?.+=',
+        ], array_map(static fn (RequestInterface $r): string => (string)$r->getUri(), $this->sent));
+    }
+
+    /**
+     * The URL arrives percent-encoded, the stored key is decoded. Characters
+     * that are regex syntax or that TYPO3's Uri would encode become "." -- one
+     * per character, umlauts included, so the key still has the stored key's
+     * length. A port stays part of the host, as in the stored key.
+     */
+    #[Test]
+    public function aPathIsDecodedAndReducedToCharactersThatSurviveTheTrip(): void
+    {
+        $this->service()->invalidateUrls(['http://localhost:8080/%C3%BCber-uns/a+b(c)$d']);
+
+        self::assertSame(
+            'http://localhost:2019/souin-api/souin/GET-localhost:8080-/.ber-uns/a.b.c..d$',
+            (string)$this->sent[0]->getUri(),
+        );
+    }
+
+    #[Test]
+    public function noUrlsSendNothing(): void
+    {
+        $this->service()->invalidateUrls([]);
+
+        self::assertSame([], $this->sent);
     }
 
     /**
@@ -243,10 +311,11 @@ final class CaddyCacheServiceTest extends TestCase
             'protocol' => 'https',
             'caddyHost' => 'caddy-proxy',
             'caddyPort' => '8443',
-            'apiEndpoint' => '/custom-api/souin',
+            'apiEndpoint' => '/custom-api/souin/',
         ])->invalidateUrls(['https://www.example.org/a']);
 
-        self::assertStringStartsWith('https://caddy-proxy:8443/custom-api/souin', (string)$this->only()->getUri());
+        self::assertSame('https://caddy-proxy:8443/custom-api/souin/GET-www.example.org-/a$', (string)$this->sent[0]->getUri());
+        self::assertSame('https://caddy-proxy:8443/custom-api/souin/GET-www.example.org-/?.+=', (string)$this->sent[1]->getUri());
     }
 
     // --- tags ---------------------------------------------------------------
@@ -385,7 +454,7 @@ final class CaddyCacheServiceTest extends TestCase
 
         self::assertFalse($result->isComplete());
         self::assertSame(['main'], $result->unmatched);
-        self::assertSame([], array_filter($this->sent, static fn($r) => $r->getMethod() === 'PURGE'));
+        self::assertSame([], array_filter($this->sent, static fn ($r) => $r->getMethod() === 'PURGE'));
     }
 
     #[Test]
@@ -741,12 +810,248 @@ final class CaddyCacheServiceTest extends TestCase
             PurgeAudit::writeTo(null);
         }
 
-        self::assertCount(2, $lines);
+        self::assertCount(3, $lines);
         self::assertIsArray($lines[0]);
         self::assertSame('purge', $lines[0]['koh_purge_audit']);
-        self::assertSame('GET-www.example.org-/a', $lines[0]['key']);
+        self::assertSame('GET-www.example.org-/a$', $lines[0]['key']);
         self::assertIsArray($lines[1]);
-        self::assertSame('.+', $lines[1]['key']);
-        self::assertSame('*', $lines[1]['ref']);
+        self::assertSame('GET-www.example.org-/?.+=', $lines[1]['key']);
+        self::assertSame('https://www.example.org/a (query variants)', $lines[1]['ref']);
+        self::assertIsArray($lines[2]);
+        self::assertSame('.+', $lines[2]['key']);
+        self::assertSame('*', $lines[2]['ref']);
+    }
+
+    // --- page URLs from the page records ----------------------------------
+
+    /** @var list<array{route: mixed, language: int}> */
+    private array $routes = [];
+
+    /**
+     * A service whose SiteFinder places every page in $site and whose pages
+     * query answers with $rows.
+     *
+     * @param list<array<string, mixed>> $rows
+     */
+    private function pageService(?Site $site, array $rows, bool $queryFails = false, ?object $queryBuilder = null): CaddyCacheService
+    {
+        $siteFinder = $this->createStub(SiteFinder::class);
+        if ($site === null) {
+            $siteFinder->method('getSiteByPageId')->willThrowException(new SiteNotFoundException('none', 1));
+        } else {
+            $siteFinder->method('getSiteByPageId')->willReturn($site);
+        }
+        $siteFinder->method('getAllSites')->willReturn([]);
+
+        $pool = $this->createStub(ConnectionPool::class);
+        if ($queryFails) {
+            $pool->method('getQueryBuilderForTable')->willThrowException(new \RuntimeException('db down'));
+        } else {
+            $pool->method('getQueryBuilderForTable')->willReturnCallback(fn (): object => $queryBuilder ?? $this->dbQueryBuilder($rows));
+        }
+
+        $extensionConfiguration = $this->createStub(ExtensionConfiguration::class);
+        $extensionConfiguration->method('get')->willReturn(['enableDebugLogging' => '1']);
+
+        return new CaddyCacheService(
+            $this->logger,
+            $this->createStub(ClientInterface::class),
+            $siteFinder,
+            $this->requestFactory(),
+            $extensionConfiguration,
+            $pool,
+        );
+    }
+
+    /**
+     * A site with these languages (id => fallbackType) whose router answers
+     * with the language base plus the slug of the record it is given, and
+     * notes what it was given.
+     *
+     * @param array<int, string> $languages
+     */
+    private function routedSite(array $languages, ?\Throwable $routerError = null): Site
+    {
+        $siteLanguages = [];
+        foreach ($languages as $id => $fallbackType) {
+            $siteLanguages[$id] = new SiteLanguage(
+                $id,
+                $id === 0 ? 'de_DE' : 'en_GB',
+                new Uri($id === 0 ? 'https://www.example.org/' : 'https://www.example.org/en/'),
+                ['fallbackType' => $fallbackType],
+            );
+        }
+        $router = $this->createStub(RouterInterface::class);
+        $router->method('generateUri')->willReturnCallback(
+            function (mixed $route, array $parameters) use ($routerError): Uri {
+                if ($routerError !== null) {
+                    throw $routerError;
+                }
+                $language = $parameters['_language'];
+                self::assertInstanceOf(SiteLanguage::class, $language);
+                $this->routes[] = ['route' => $route, 'language' => $language->getLanguageId()];
+                $slug = is_array($route) ? (string)$route['slug'] : '/?id=' . (string)$route;
+
+                return new Uri(rtrim((string)$language->getBase(), '/') . $slug);
+            }
+        );
+        $site = $this->createStub(Site::class);
+        $site->method('getLanguages')->willReturn($siteLanguages);
+        $site->method('getRouter')->willReturn($router);
+
+        return $site;
+    }
+
+    /**
+     * One URL per language in which the page exists, built from the records
+     * themselves. A translation goes to the router as the default page's uid
+     * with its own as _LOCALIZED_UID, the shape PageRouter takes as a ready
+     * record instead of looking the page up again.
+     */
+    #[Test]
+    public function aPageHasOneUrlPerLanguageItExistsIn(): void
+    {
+        // Values as the database hands them over: strings.
+        $urls = $this->pageService($this->routedSite([0 => 'strict', 1 => 'strict', 2 => 'strict', 3 => 'strict']), [
+            ['uid' => '42', 'sys_language_uid' => '0', 'l10n_parent' => '0', 'slug' => '/ueber-uns'],
+            ['uid' => '43', 'sys_language_uid' => '1', 'l10n_parent' => '42', 'slug' => '/about'],
+            ['uid' => '45', 'sys_language_uid' => '3', 'l10n_parent' => '42', 'slug' => '/a-propos'],
+        ])->getPageUrls(42);
+
+        self::assertSame([
+            'https://www.example.org/ueber-uns',
+            'https://www.example.org/en/about',
+            'https://www.example.org/en/a-propos',
+        ], $urls, 'language 2 has no translation and is skipped; language 3 still gets its URL');
+        self::assertSame(42, $this->routes[1]['route']['uid']);
+        self::assertSame(43, $this->routes[1]['route']['_LOCALIZED_UID']);
+        self::assertSame(1, $this->routes[1]['language']);
+    }
+
+    /**
+     * The router never sees the bare page id. Asked that way for a hidden page
+     * it answered with the site base, and every save of a hidden page purged
+     * the start page. The record is used whether hidden or not: a page that
+     * was just hidden is the one whose cached copy has to go.
+     */
+    #[Test]
+    public function aHiddenPageGetsItsOwnUrlAndNotTheSiteBase(): void
+    {
+        $urls = $this->pageService($this->routedSite([0 => 'strict']), [
+            ['uid' => 42, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/entwurf', 'hidden' => 1],
+        ])->getPageUrls(42);
+
+        self::assertSame(['https://www.example.org/entwurf'], $urls);
+        self::assertIsArray($this->routes[0]['route']);
+    }
+
+    /**
+     * A language without a translation renders the page only when it falls
+     * back to the default language. Then it gets a URL under its own base with
+     * the default slug; in strict or free mode it gets none.
+     */
+    #[Test]
+    public function anUntranslatedLanguageOnlyGetsAUrlWhenItFallsBack(): void
+    {
+        $default = ['uid' => 42, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/seite'];
+
+        self::assertSame(
+            ['https://www.example.org/seite'],
+            $this->pageService($this->routedSite([0 => 'strict', 1 => 'strict']), [$default])->getPageUrls(42),
+        );
+        self::assertSame(
+            ['https://www.example.org/seite'],
+            $this->pageService($this->routedSite([0 => 'strict', 1 => 'free']), [$default])->getPageUrls(42),
+        );
+
+        $this->routes = [];
+        self::assertSame(
+            ['https://www.example.org/seite', 'https://www.example.org/en/seite'],
+            $this->pageService($this->routedSite([0 => 'strict', 1 => 'fallback']), [$default])->getPageUrls(42),
+        );
+        self::assertSame(1, $this->routes[1]['route']['sys_language_uid']);
+        self::assertSame(0, $this->routes[1]['route']['l10n_parent']);
+    }
+
+    /**
+     * Without its default-language record (a uid that is only a translation,
+     * or a page that is gone) there is nothing to build a URL from.
+     */
+    #[Test]
+    public function aPageWithoutItsDefaultRecordHasNoUrls(): void
+    {
+        self::assertSame([], $this->pageService($this->routedSite([0 => 'strict', 1 => 'strict']), [
+            ['uid' => 43, 'sys_language_uid' => 1, 'l10n_parent' => 42, 'slug' => '/about'],
+        ])->getPageUrls(42));
+        self::assertSame([], $this->pageService($this->routedSite([0 => 'strict']), [
+            ['uid' => 99, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/other'],
+        ])->getPageUrls(42));
+        self::assertSame([], $this->routes);
+    }
+
+    /**
+     * Only the page's own site. Before, every site of the installation built
+     * a URL for every page, and a site the page does not belong to answered
+     * with its base.
+     */
+    #[Test]
+    public function aPageOutsideEverySiteHasNoUrls(): void
+    {
+        self::assertSame([], $this->pageService(null, [
+            ['uid' => 42, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/x'],
+        ])->getPageUrls(42));
+        self::assertSame([], $this->pageService($this->routedSite([0 => 'strict']), [])->getPageUrls(0));
+    }
+
+    /**
+     * The caller is a DataHandler hook: a failing query or router must cost
+     * the URLs, not the editor's save.
+     */
+    #[Test]
+    public function aFailingQueryOrRouterYieldsNoUrlsRatherThanThrowing(): void
+    {
+        self::assertSame([], $this->pageService($this->routedSite([0 => 'strict']), [], true)->getPageUrls(42));
+        self::assertSame('Caddy Cache: Could not generate URL', $this->logger->records[0]['message']);
+        self::assertSame('db down', $this->logger->records[0]['context']['error']);
+
+        self::assertSame([], $this->pageService(
+            $this->routedSite([0 => 'strict'], new \ArgumentCountError('router')),
+            [['uid' => 42, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/x']],
+        )->getPageUrls(42));
+        self::assertSame(42, $this->logger->records[1]['context']['pageId']);
+    }
+
+    /**
+     * Hidden and deleted records count (see aHiddenPageGetsItsOwnUrl…), so
+     * the query runs without the frontend restrictions, and only on live
+     * records: a workspace version is not what the edge holds.
+     */
+    #[Test]
+    public function theRecordsAreReadWithoutRestrictionsAndFromLiveOnly(): void
+    {
+        $queryBuilder = $this->dbQueryBuilder([['uid' => 42, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/x']]);
+        $restrictions = $queryBuilder->getRestrictions();
+        self::assertInstanceOf(\PHPUnit\Framework\MockObject\MockObject::class, $restrictions);
+        $restrictions->expects(self::once())->method('removeAll');
+        $parameters = [];
+        $queryBuilder = $this->createMock(\TYPO3\CMS\Core\Database\Query\QueryBuilder::class);
+        foreach (['select', 'from', 'where'] as $chained) {
+            $queryBuilder->method($chained)->willReturnSelf();
+        }
+        $queryBuilder->method('getRestrictions')->willReturn($restrictions);
+        $queryBuilder->method('expr')->willReturn($this->createStub(\TYPO3\CMS\Core\Database\Query\Expression\ExpressionBuilder::class));
+        $queryBuilder->method('createNamedParameter')->willReturnCallback(
+            static function (mixed $value) use (&$parameters): string {
+                $parameters[] = $value;
+
+                return ':p' . count($parameters);
+            }
+        );
+        $queryBuilder->method('executeQuery')->willReturn($this->dbResult([['uid' => 42, 'sys_language_uid' => 0, 'l10n_parent' => 0, 'slug' => '/x']]));
+
+        $urls = $this->pageService($this->routedSite([0 => 'strict']), [], false, $queryBuilder)->getPageUrls(42);
+
+        self::assertSame(['https://www.example.org/x'], $urls);
+        self::assertSame([42, 42, 0], $parameters, 'uid, l10n_parent, t3ver_wsid = 0');
     }
 }
