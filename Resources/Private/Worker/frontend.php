@@ -17,6 +17,7 @@ declare(strict_types=1);
  *   DB_REUSE_MAX_AGE          Seconds a connection is kept at most        (default: 600)
  *   DB_REUSE_MAX_REQUESTS     Requests a connection serves at most        (default: 1000)
  *   DB_REUSE_LIVENESS_CHECK   SELECT 1 before reusing a connection        (default: 1)
+ *   KOH_PERSISTENT_BOOTSTRAP  Boot TYPO3 once per worker, reset per request (default: 0)
  */
 
 if (!($_SERVER['FRANKENPHP_WORKER'] ?? false)) {
@@ -36,6 +37,7 @@ require $autoloadPath;
 
 use Koh\FrankenPHP\Runtime\DatabaseConnectionReuse;
 use Koh\FrankenPHP\Runtime\FrontendWorker;
+use Koh\FrankenPHP\Runtime\PersistentBootstrap;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
 
 $backendEntryPoint = $_ENV['TYPO3_BACKEND_ENTRYPOINT']
@@ -47,6 +49,8 @@ $maxRequests = (int) ($_ENV['MAX_REQUESTS'] ?? 500);
 $classifier = new RequestClassifier($backendEntryPoint);
 // Settings may come from the worker's `env` lines in the Caddyfile or from the
 // container environment; $_ENV is empty when variables_order lacks E.
-$connections = DatabaseConnectionReuse::fromEnvironment($_ENV + $_SERVER + getenv());
-$worker = new FrontendWorker($classifier, $autoloadPath, $connections);
+$environment = $_ENV + $_SERVER + getenv();
+$connections = DatabaseConnectionReuse::fromEnvironment($environment);
+$persistent = PersistentBootstrap::isEnabled($environment) ? new PersistentBootstrap() : null;
+$worker = new FrontendWorker($classifier, $autoloadPath, $connections, $persistent);
 $worker->run($maxRequests);

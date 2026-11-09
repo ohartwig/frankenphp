@@ -25,6 +25,8 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `Classes/Runtime/FrontendWorker` | Worker loop with `frankenphp_handle_request()`, a fresh TYPO3 bootstrap per request with `REQUESTTYPE_FE` |
 | `Classes/Runtime/RequestStateReset` | Clears what survives a bootstrap in a long-lived process: the `getIndpEnv()` cache (host and URL of the previous request), singletons, `BE_USER`/`LANG`/`TYPO3_REQUEST`, and the error and exception handlers each bootstrap registers |
 | `Classes/Runtime/DatabaseConnectionReuse` | Keeps the database connection open for the next request, so the TCP/TLS handshake is not paid per request, and closes it when that is not safe: a transaction left open (rolled back and logged), idle longer than the idle limit, older than the age limit, past the request limit, or not answering a `SELECT 1` before the request |
+| `Classes/Runtime/PersistentBootstrap` | With `KOH_PERSISTENT_BOOTSTRAP=1`: boots TYPO3 on the first request, records the boot state, and puts it back before every later request (see *Persistent bootstrap*) |
+| `Classes/Runtime/LeakGuard` | With `KOH_PERSISTENT_BOOTSTRAP=1`: checks each response against its request before it is sent; on a finding the request gets a 503 and the worker ends |
 | `Classes/Runtime/RequestClassifier` | Pure PHP (no TYPO3 dependencies), classifies requests from `$_SERVER` as frontend/backend/install. Backend detection by path OR by host |
 | `Resources/Private/Worker/frontend.php` | Worker entry point (register it as `worker` with `match` in the frontend `php` block, see below) |
 
@@ -43,6 +45,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `DB_REUSE_MAX_REQUESTS` | Requests a connection serves at most (`0` = no limit) | `1000` |
 | `DB_REUSE_LIVENESS_CHECK` | `SELECT 1` on a kept connection before the request, so a connection the server dropped is replaced rather than failing the request | `1` |
 | `KOH_CHASH_REDIRECT` | Redirect page URLs that carry parameters without the required cHash to the same URL without them, instead of the 404 (see `CacheHashRedirectMiddleware`); `0` restores the 404 | `1` |
+| `KOH_PERSISTENT_BOOTSTRAP` | Boot TYPO3 once per worker and start every later request from the recorded boot state instead of booting again (see *Persistent bootstrap*); `0` boots per request, as before | `0` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
 
 ### EarlyHintMiddleware
@@ -61,10 +64,42 @@ Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration
 The frontend worker writes one JSON line per request it serves, to the container log:
 
 ```json
-{"koh_timing":"frontend","host":"example.org","path":"/blog","status":200,"page":"rendered","boot_ms":31.2,"app_ms":214.9,"total_ms":246.4,"worker_request":17,"mem_peak_mb":42.0}
+{"koh_timing":"frontend","host":"example.org","path":"/blog","status":200,"page":"rendered","boot_ms":31.2,"app_ms":214.9,"total_ms":246.4,"worker_request":17,"mem_peak_mb":42.0,"bootstrap":"fresh"}
 ```
 
 `boot_ms` is TYPO3's bootstrap, which the worker runs for every request; `app_ms` is the application after it. `page` is `rendered` when TYPO3 generated the page content in this request (`AfterCacheableContentIsGeneratedEvent`), `not-rendered` for a page from the page cache or a response that is no page, so read it with `status`. The edge only sees the total of a request it had not cached; these lines say whether that time went into booting or into rendering. Only the path is logged, never the query string. A request turned away (backend, Install) is not timed. `KOH_REQUEST_TIMING=0` switches it off.
+
+`bootstrap` is `fresh` when the request booted TYPO3 and `reused` when it ran on the persistent bootstrap's kept boot; `boot_ms` is then the cost of putting the boot state back.
+
+### Persistent bootstrap
+
+By default the worker boots TYPO3 for every request: building the container, loading `ext_localconf.php` and TCA, wiring the services. With `KOH_PERSISTENT_BOOTSTRAP=1` it boots once, on the first frontend request, and every later request starts from the state that boot left behind. Off, the worker behaves as before.
+
+What a boot produces is either configuration, the same for every request, or request state, which must not outlive its request. Right after the boot the worker records what exists at that point, and before every later request it puts exactly that back:
+
+| What | Per request | Why |
+|---|---|---|
+| Services in the DI container | `Container::reset()` drops every service instantiated since the boot (Context, PageRenderer, AssetCollector, CacheManager with the runtime cache, the Extbase persistence session, every extension service) and calls `reset()` on `ResetInterface` services; the services that existed after the boot are put back | The boot's own services hold what `ext_localconf.php` registered (renderer, text extractor and meta tag registries, the TCA schema); everything else is request state |
+| `RequestId`, `RequestClock`, `LogManager` | New instances, as `Bootstrap::init()` creates them | The request id carries the CSP nonce; the clock and the log lines belong to the request |
+| `GeneralUtility` | Container set again, singleton instances back to those after the boot, `getIndpEnv()` memo and class-name cache emptied | `RequestStateReset` empties both after every request |
+| Globals | Restored to their state after the boot (`TYPO3_CONF_VARS`, `TCA`, ...); globals a request added (`TYPO3_REQUEST`, `BE_USER`, `LANG`, `TSFE`, ...) removed | A request may change `TYPO3_CONF_VARS` at runtime |
+| Time | `SystemEnvironmentBuilder::run()`: `EXEC_TIME`, `SIM_EXEC_TIME`, `ACCESS_TIME`, `SIM_ACCESS_TIME`, `Environment`; the date aspect follows from the new Context | Access checks and the date aspect depend on it |
+| Error handling, time zone | Set up again | `displayErrors = -1` decides per client address |
+| Database connections | Unchanged: `DatabaseConnectionReuse` as before | `ConnectionPool` keeps them outside the container |
+
+A failsafe boot (no usable configuration) is never kept.
+
+**Leak guard.** With the switch on, the worker checks every response before it is sent: the host `getIndpEnv()` memoised, every other memoised `getIndpEnv()` value against a fresh computation, the host of `$GLOBALS['TYPO3_REQUEST']`, and the host and path prefix of the site language TYPO3 resolved. On a mismatch the response is discarded, the client gets `503` with `Cache-Control: no-store`, one line is logged
+
+```json
+{"koh_worker_leak":"frontend","check":"indpenv_host","expected":"site-b.example","actual":"site-a.example","worker_request":2}
+```
+
+and the worker ends, so FrankenPHP starts a fresh one for the next request. The guard looks at where a host or language can go wrong; it does not read the page, so wrong content from other state (for example a service that caches a page title) is the reset's job and the worker alternation test's to prove.
+
+**Static properties are not reset**, in either mode: TYPO3 offers no inventory of what an extension keeps in static properties, and resetting them to their defaults would also drop what is meant to last, such as `ConnectionPool`'s connections. An extension that appends to a static property in a constructor (the worker alternation test's check 5) grows by one piece per request in either mode. `MAX_REQUESTS` bounds that: the worker restarts after that many requests.
+
+Measured with the worker alternation test (SQLite, 96 requests, one worker, medians): booting per request, `boot_ms` 11.6 and `total_ms` 20.0, with the per-request memory peak growing from 16 to 26 MB over the run; with the persistent bootstrap, the first request 284 ms, every later one `boot_ms` 0.1 and `total_ms` 6.7, with the memory peak flat at 16 MB.
 
 ### CacheHashRedirectMiddleware
 
@@ -303,12 +338,14 @@ and would keep if the bootstrap were shared between requests:
    of the page and by a middleware after the page has been rendered, must be
    this request's.
 
-The current worker, which bootstraps TYPO3 for every request, passes checks
-1 to 4 and 6. It does not pass check 5: nothing resets static properties, so
-the appended string grows by one piece with every request. The test reports
-that as a warning and does not fail; making it a failure is a TODO for the
-change that keeps the bootstrap, which has to decide how such state is
-reset. A switch for a shared bootstrap must keep every other check passing.
+The worker passes checks 1 to 4 and 6 in both modes, booting per request
+and with `KOH_PERSISTENT_BOOTSTRAP=1`. Check 1 includes a marker that is only
+set on a Context object that has already served a request, so it also proves
+that every request gets a new Context. Check 5 does not pass in either mode:
+nothing resets static properties, so the appended string grows by one piece
+with every request (see *Persistent bootstrap*). The test reports that as a
+warning and does not fail; making it a failure is a TODO for the day static
+state can be reset safely.
 
 The markers come from a `USER_INT` with `config.no_cache = 1`, so every
 request runs the full render path. Each response also carries a token and a
@@ -317,7 +354,13 @@ counts if the token never changes and the counter rises by exactly one per
 request, which proves that one worker process served all of it. Any mismatch
 fails with the request number, URL, marker, wrong value and expected value.
 
-CI runs it as `test:worker-alternation`. Locally it needs what the CI image
+CI runs it twice: `test:worker-alternation` boots per request,
+`test:worker-alternation:persistent` sets `WA_PERSISTENT_BOOTSTRAP=1`, which
+starts the worker with `KOH_PERSISTENT_BOOTSTRAP=1`. After the requests the
+run summarises the worker's `koh_timing` lines (medians of `boot_ms`,
+`app_ms`, `total_ms`, the memory peak) and fails unless they show the
+expected mode (every request `fresh`; or the first `fresh` and every later
+one `reused`) and no `koh_worker_leak` line. Locally it needs what the CI image
 provides (PHP with curl and pdo_sqlite, Composer, FrankenPHP, git, tar).
 Docker cannot mount every directory, so copy the working tree into a
 container rather than mounting it:
