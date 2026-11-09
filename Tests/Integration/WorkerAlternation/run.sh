@@ -84,7 +84,7 @@ fi
 
 echo "--- alternating requests"
 rc=0
-php "$HERE/check.php" 127.0.0.1 8080 || rc=$?
+php -d display_errors=stderr "$HERE/check.php" 127.0.0.1 8080 "$PROJECT" || rc=$?
 
 echo "--- request timing (koh_timing lines of this run)"
 if [ "$WA_PERSISTENT_BOOTSTRAP" = 1 ]; then mode=persistent; else mode=fresh; fi

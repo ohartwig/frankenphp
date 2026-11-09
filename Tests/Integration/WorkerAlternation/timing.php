@@ -9,8 +9,8 @@ declare(strict_types=1);
  * koh_worker_leak lines. Usage: php timing.php <log> [fresh|persistent]
  *
  * With a second argument it also checks the mode the worker really ran in:
- * `fresh`, every request booted TYPO3; `persistent`, the first booted and
- * every later one reused that boot. Exit code 1 if not, or on any
+ * `fresh`, every request booted TYPO3; `persistent`, the first two booted
+ * and every later one reused the second boot. Exit code 1 if not, or on any
  * koh_worker_leak line.
  */
 
@@ -88,7 +88,9 @@ $fresh = count($byBootstrap['fresh'] ?? []);
 $reused = count($byBootstrap['reused'] ?? []);
 $ok = $leaks === 0 && match ($expect) {
     'fresh' => $reused === 0 && $fresh > 0,
-    'persistent' => $fresh === 1 && $reused === count($timings) - 1 && $reused > 0,
+    // The first two requests boot (the first on cold caches), every later
+    // one reuses the second boot.
+    'persistent' => $fresh === 2 && $reused === count($timings) - 2 && $reused > 0,
     default => false,
 };
 if (!$ok) {

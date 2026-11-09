@@ -346,6 +346,8 @@ final class FrontendWorkerTest extends TestCase
         $persistent = new PersistentBootstrap(
             function () use ($completeBoot): Container {
                 ++$this->boots;
+                // As Bootstrap::init() does: TYPO3_CONF_VARS from the configuration.
+                $GLOBALS['TYPO3_CONF_VARS']['FAKE'] = 'boot';
                 $container = new Container();
                 $state = new \stdClass();
                 $state->complete = true;
@@ -370,12 +372,13 @@ final class FrontendWorkerTest extends TestCase
     }
 
     /**
-     * Switched on, TYPO3 boots once; every later request runs on the kept
-     * container, without what the request before it left in globals,
-     * TYPO3_CONF_VARS or the container.
+     * Switched on, TYPO3 boots for the first two requests and keeps the
+     * second boot; every later request runs on the kept container, without
+     * what the request before it left in globals, TYPO3_CONF_VARS or the
+     * container.
      */
     #[Test]
-    public function aPersistentBootstrapBootsOnceAndStartsEveryRequestFromTheBootState(): void
+    public function aPersistentBootstrapKeepsTheSecondBootAndStartsEveryRequestFromIt(): void
     {
         $lines = [];
         RequestTiming::writeTo(static function (string $line) use (&$lines): void {
@@ -390,12 +393,13 @@ final class FrontendWorkerTest extends TestCase
         }
 
         self::assertSame('page 1page 2page 3', $output);
-        self::assertSame(1, $this->boots);
-        self::assertSame(2, $this->refreshes);
+        // The first boot may have run on cold caches; the second is kept.
+        self::assertSame(2, $this->boots);
+        self::assertSame(1, $this->refreshes);
         $clean = ['container' => true, 'leftover' => false, 'requestService' => false, 'confVar' => 'boot'];
         self::assertSame([$clean, $clean, $clean], FakeApplication::$seen);
         $modes = array_map(static fn(string $line): mixed => (json_decode($line, true) ?: [])['bootstrap'] ?? null, $lines);
-        self::assertSame(['fresh', 'reused', 'reused'], $modes);
+        self::assertSame(['fresh', 'fresh', 'reused'], $modes);
         // The last request's service is gone once the loop is back, too.
         self::assertInstanceOf(Container::class, FakeApplication::$container);
         self::assertFalse(FakeApplication::$container->has('fake.request.service'));
