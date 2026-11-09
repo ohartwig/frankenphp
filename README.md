@@ -234,6 +234,57 @@ services:
         event: Your\Extension\Event\CustomEvent
 ```
 
+## Worker alternation test
+
+A worker serves one request after another in the same PHP process, so
+anything a request leaves behind in static properties or globals is there
+for the next one. The reset between requests (`RequestStateReset`) exists
+because of exactly that: without it, `GeneralUtility::getIndpEnv()` answers a
+request for one domain with the host of the domain served before it.
+
+`Tests/Integration/WorkerAlternation/` checks this end to end. `run.sh`
+builds a throwaway TYPO3 14 project on SQLite with this working tree's
+extension, two sites (`site-a.test`, `site-b.test`) with German and English
+and two pages each, all on the same slugs, and starts FrankenPHP with exactly
+one frontend worker. `check.php` then sends 96 requests that switch host,
+language and page in a fixed, interleaved order, including back-to-back
+switches and repeats, and checks every response against its own request:
+
+- HTTP 200;
+- host, site URL and request URI from `getIndpEnv()`, from the request's
+  `normalizedParams`, from `$GLOBALS['TYPO3_REQUEST']` and from a
+  `SingletonInterface` object that remembers the host it first saw;
+- site identifier and base, language id, code and base, page uid and title;
+- absolute links to the page itself and to the other page of the site, from
+  PHP and from TypoScript `typolink`.
+
+The markers come from a `USER_INT` with `config.no_cache = 1`, so every
+request runs the full render path. Each response also carries a token and a
+request counter that live in a static property of the worker: the run only
+counts if the token never changes and the counter rises by exactly one per
+request, which proves that one worker process served all of it. Any mismatch
+fails with the request number, URL, marker, wrong value and expected value.
+
+CI runs it as `test:worker-alternation`. Locally it needs what the CI image
+provides (PHP with curl and pdo_sqlite, Composer, FrankenPHP, git, tar).
+Docker cannot mount every directory, so copy the working tree into a
+container rather than mounting it:
+
+```bash
+docker create --name worker-alternation --entrypoint sleep \
+    registry.ole-hartwig.eu/devops/images/franken-php/ci:3.2.173-8.5 infinity
+docker start worker-alternation
+git ls-files -z -co --exclude-standard | tar --null -T - -cf - \
+    | docker exec -i worker-alternation sh -c 'mkdir -p /repo && tar --no-same-owner -xf - -C /repo'
+docker exec worker-alternation sh -c 'cd /repo && git init -q && git add -A \
+    && Tests/Integration/WorkerAlternation/run.sh'
+docker rm -f worker-alternation
+```
+
+`WA_WORK_DIR` sets the directory the test project is built in (default: a
+new temporary directory); the FrankenPHP and TYPO3 logs are printed when the
+test fails.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
