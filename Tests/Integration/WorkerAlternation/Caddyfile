@@ -1,0 +1,32 @@
+# One listener for both test hosts, exactly ONE frontend worker thread, so
+# every page request of the run is served by the same worker.
+{
+	auto_https off
+	admin off
+	frankenphp {
+		num_threads 2
+	}
+}
+
+:8080 {
+	root * {$WA_PROJECT_DIR}/public
+
+	# Readiness probe for run.sh; never reaches PHP, so it does not count as
+	# a worker request.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle {
+		rewrite * /index.php
+		php {
+			worker {
+				file {$WA_PROJECT_DIR}/vendor/koh/frankenphp/Resources/Private/Worker/frontend.php
+				match *
+				num 1
+				env MAX_REQUESTS 100000
+				env TYPO3_BACKEND_ENTRYPOINT /typo3
+			}
+		}
+	}
+}

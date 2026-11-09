@@ -1,0 +1,48 @@
+# Every request renders in full: the test is about the render path, not the
+# page cache.
+config {
+    no_cache = 1
+    admPanel = 0
+}
+
+page = PAGE
+page {
+    # Markers computed in PHP, see MarkerRenderer.
+    10 = USER_INT
+    10 {
+        userFunc = Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\MarkerRenderer->render
+        # The page each page links to as its "other" page (default-language uids).
+        otherPage {
+            1 = 2
+            2 = 1
+            10 = 11
+            11 = 10
+        }
+    }
+
+    # The same facts through TypoScript's own data providers and typolink.
+    20 = COA
+    20 {
+        wrap = <ul id="worker-alternation-typoscript">|</ul>
+        10 = TEXT
+        10.data = site:identifier
+        10.wrap = <li data-marker="ts.site.identifier">|</li>
+        20 = TEXT
+        20.data = getIndpEnv:HTTP_HOST
+        20.wrap = <li data-marker="ts.indpenv.http_host">|</li>
+        30 = TEXT
+        30.data = siteLanguage:languageId
+        30.wrap = <li data-marker="ts.language.id">|</li>
+        40 = TEXT
+        40.data = page:title
+        40.htmlSpecialChars = 1
+        40.wrap = <li data-marker="ts.page.title">|</li>
+        50 = TEXT
+        50.typolink {
+            parameter.data = page:uid
+            forceAbsoluteUrl = 1
+            returnLast = url
+        }
+        50.wrap = <li data-marker="ts.link.self">|</li>
+    }
+}

@@ -1,0 +1,44 @@
+{
+    "name": "koh/frankenphp-worker-alternation",
+    "description": "Throwaway TYPO3 project for the worker alternation test; run.sh copies it to a work directory",
+    "license": "MIT",
+    "type": "project",
+    "require": {
+        "php": "^8.3",
+        "koh/frankenphp": "@dev",
+        "koh/frankenphp-worker-alternation-markers": "@dev",
+        "typo3/cms-backend": "^14.0",
+        "typo3/cms-core": "^14.0",
+        "typo3/cms-fluid": "^14.0",
+        "typo3/cms-frontend": "^14.0",
+        "typo3/cms-install": "^14.0"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../src",
+            "options": {
+                "symlink": false
+            }
+        },
+        {
+            "type": "path",
+            "url": "../src/Tests/Integration/WorkerAlternation/Markers",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "config": {
+        "allow-plugins": {
+            "typo3/class-alias-loader": true,
+            "typo3/cms-composer-installers": true
+        },
+        "sort-packages": true
+    },
+    "extra": {
+        "typo3/cms": {
+            "web-dir": "public"
+        }
+    }
+}
