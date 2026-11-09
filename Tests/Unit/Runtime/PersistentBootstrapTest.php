@@ -106,4 +106,25 @@ final class PersistentBootstrapTest extends TestCase
         $bootstrap->afterRequest();
         self::assertFalse($bootstrap->isBooted());
     }
+
+    /**
+     * A boot from cold caches instantiates request services as well; the
+     * runtime cache and the CacheManager are never carried into a request.
+     */
+    #[Test]
+    public function requestCachesAreNeverKeptEvenIfTheBootCreatedThem(): void
+    {
+        $container = new Container();
+        $container->set('cache.runtime', new \stdClass());
+        $container->set(\TYPO3\CMS\Core\Cache\CacheManager::class, new \stdClass());
+        $container->set('boot.registry', new \stdClass());
+        $bootstrap = new PersistentBootstrap();
+        $bootstrap->record($container);
+
+        $bootstrap->resetContainer();
+
+        self::assertFalse($container->initialized('cache.runtime'));
+        self::assertFalse($container->initialized(\TYPO3\CMS\Core\Cache\CacheManager::class));
+        self::assertTrue($container->initialized('boot.registry'));
+    }
 }

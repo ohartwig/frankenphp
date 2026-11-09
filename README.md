@@ -25,7 +25,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `Classes/Runtime/FrontendWorker` | Worker loop with `frankenphp_handle_request()`, a fresh TYPO3 bootstrap per request with `REQUESTTYPE_FE` |
 | `Classes/Runtime/RequestStateReset` | Clears what survives a bootstrap in a long-lived process: the `getIndpEnv()` cache (host and URL of the previous request), singletons, `BE_USER`/`LANG`/`TYPO3_REQUEST`, and the error and exception handlers each bootstrap registers |
 | `Classes/Runtime/DatabaseConnectionReuse` | Keeps the database connection open for the next request, so the TCP/TLS handshake is not paid per request, and closes it when that is not safe: a transaction left open (rolled back and logged), idle longer than the idle limit, older than the age limit, past the request limit, or not answering a `SELECT 1` before the request |
-| `Classes/Runtime/PersistentBootstrap` | With `KOH_PERSISTENT_BOOTSTRAP=1`: boots TYPO3 on the first request, records the boot state, and puts it back before every later request (see *Persistent bootstrap*) |
+| `Classes/Runtime/PersistentBootstrap` | With `KOH_PERSISTENT_BOOTSTRAP=1`: boots TYPO3 for the first two requests, records the state of the second boot, and puts it back before every later request (see *Persistent bootstrap*) |
 | `Classes/Runtime/LeakGuard` | With `KOH_PERSISTENT_BOOTSTRAP=1`: checks each response against its request before it is sent; on a finding the request gets a 503 and the worker ends |
 | `Classes/Runtime/RequestClassifier` | Pure PHP (no TYPO3 dependencies), classifies requests from `$_SERVER` as frontend/backend/install. Backend detection by path OR by host |
 | `Resources/Private/Worker/frontend.php` | Worker entry point (register it as `worker` with `match` in the frontend `php` block, see below) |
@@ -73,9 +73,11 @@ The frontend worker writes one JSON line per request it serves, to the container
 
 ### Persistent bootstrap
 
-By default the worker boots TYPO3 for every request: building the container, loading `ext_localconf.php` and TCA, wiring the services. With `KOH_PERSISTENT_BOOTSTRAP=1` it boots once, on the first frontend request, and every later request starts from the state that boot left behind. Off, the worker behaves as before.
+By default the worker boots TYPO3 for every request: building the container, loading `ext_localconf.php` and TCA, wiring the services. With `KOH_PERSISTENT_BOOTSTRAP=1` it boots for the first two frontend requests and keeps the second boot: every later request starts from the state that boot left behind. Off, the worker behaves as before.
 
-What a boot produces is either configuration, the same for every request, or request state, which must not outlive its request. Right after the boot the worker records what exists at that point, and before every later request it puts exactly that back:
+Why the second: the first boot of a worker often runs on cold caches (after a deployment or a cache flush). Building TCA and the configuration from scratch then instantiates request services too: the runtime cache, the CacheManager, `ConnectionPool`, `FlashMessageService`, services of the form framework. Kept as boot state, the runtime cache carried one request's entries into the next; the form framework's translations came out empty in English, and the empty labels went into the `l10n` cache, where they outlived the worker. The first request therefore serves its page with a boot of its own, which is dropped; the second boot runs on the caches the first one warmed. The runtime cache, the CacheManager, Context and the FlashMessageService are never kept even if a boot created them, and globals the first request added are removed before the second boot.
+
+What a boot produces is either configuration, the same for every request, or request state, which must not outlive its request. Right after the kept boot the worker records what exists at that point, and before every later request it puts exactly that back:
 
 | What | Per request | Why |
 |---|---|---|
@@ -99,7 +101,7 @@ and the worker ends, so FrankenPHP starts a fresh one for the next request. The 
 
 **Static properties are not reset**, in either mode: TYPO3 offers no inventory of what an extension keeps in static properties, and resetting them to their defaults would also drop what is meant to last, such as `ConnectionPool`'s connections. An extension that appends to a static property in a constructor (the worker alternation test's check 5) grows by one piece per request in either mode. `MAX_REQUESTS` bounds that: the worker restarts after that many requests.
 
-Measured with the worker alternation test (SQLite, 96 requests, one worker, medians): booting per request, `boot_ms` 11.6 and `total_ms` 20.0, with the per-request memory peak growing from 16 to 26 MB over the run; with the persistent bootstrap, the first request 284 ms, every later one `boot_ms` 0.1 and `total_ms` 6.7, with the memory peak flat at 16 MB.
+Measured with the worker alternation test (SQLite, 96 requests, one worker, medians): booting per request, `boot_ms` 11.6 and `total_ms` 20.0, with the per-request memory peak growing from 16 to 26 MB over the run; with the persistent bootstrap (then still keeping the first boot), the first request 284 ms, every later one `boot_ms` 0.1 and `total_ms` 6.7, with the memory peak flat at 16 MB. With the form checks (122 requests, 26 of them form steps, keeping the second boot): booting per request, `total_ms` 34.2 and a memory peak growing from 20 to 30 MB; with the persistent bootstrap, the two booting requests about 350 ms, every later one `boot_ms` 0.1 and `total_ms` 23.3, with the memory peak between 22 and 26 MB.
 
 ### CacheHashRedirectMiddleware
 
@@ -292,7 +294,7 @@ request for one domain with the host of the domain served before it.
 builds a throwaway TYPO3 14 project on SQLite with this working tree's
 extension, two sites (`site-a.test`, `site-b.test`) with German and English
 and two pages each, all on the same slugs, and starts FrankenPHP with exactly
-one frontend worker. `check.php` then sends 96 requests that switch host,
+one frontend worker. `check.php` then sends 96 page requests that switch host,
 language and page in a fixed, interleaved order, including back-to-back
 switches and repeats, and checks every response against its own request:
 
@@ -337,8 +339,31 @@ and would keep if the bootstrap were shared between requests:
    and its `frontend.page.information` page id, read by the last `USER_INT`
    of the page and by a middleware after the page has been rendered, must be
    this request's.
+7. **Forms of the form framework** (`typo3/cms-form`), modelled on the intake
+   forms of the real sites. Each site has a single-page form (Text, Textarea
+   and SingleSelect fields, `NotEmpty` and `EmailAddress` validators) on its
+   second page and a two-page form on its root page; labels, validation
+   messages and the confirmation come from XLF in German and English, the
+   confirmation naming site and language. The finishers are `SaveToDatabase`,
+   a test finisher that records the site, language and host of the request
+   into the same row, and `Confirmation`. Between the page requests the
+   runner fills them in on both hosts and in both languages, each value
+   unique to its request:
+   - an invalid submission (required field empty, a broken address) gets the
+     error messages of its own language, shows its own values again and
+     stores nothing;
+   - a valid one gets the confirmation of its site and language and stores
+     exactly one row with its values, site, language and host;
+   - step 1 of the two-page form on one host, requests to the other host,
+     then step 2 on the first: it finishes with step 1's name, which only
+     travelled in the HMAC-signed `__state`;
+   - right after a submission, the form on the other host is empty, with a
+     state that holds no values;
+   - a submission with a changed `__trustedProperties` or `__state` (the
+     signature kept) is refused: no confirmation, no row;
+   - no response contains a value an earlier submission sent.
 
-The worker passes checks 1 to 4 and 6 in both modes, booting per request
+The worker passes checks 1 to 4, 6 and 7 in both modes, booting per request
 and with `KOH_PERSISTENT_BOOTSTRAP=1`. Check 1 includes a marker that is only
 set on a Context object that has already served a request, so it also proves
 that every request gets a new Context. Check 5 does not pass in either mode:
@@ -359,8 +384,8 @@ CI runs it twice: `test:worker-alternation` boots per request,
 starts the worker with `KOH_PERSISTENT_BOOTSTRAP=1`. After the requests the
 run summarises the worker's `koh_timing` lines (medians of `boot_ms`,
 `app_ms`, `total_ms`, the memory peak) and fails unless they show the
-expected mode (every request `fresh`; or the first `fresh` and every later
-one `reused`) and no `koh_worker_leak` line. Locally it needs what the CI image
+expected mode (every request `fresh`; or the first two `fresh` and every
+later one `reused`) and no `koh_worker_leak` line. Locally it needs what the CI image
 provides (PHP with curl and pdo_sqlite, Composer, FrankenPHP, git, tar).
 Docker cannot mount every directory, so copy the working tree into a
 container rather than mounting it:

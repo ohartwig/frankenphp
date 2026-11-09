@@ -7,11 +7,14 @@ namespace Koh\FrankenPHP\Runtime;
 use Composer\Autoload\ClassLoader;
 use Psr\Container\ContainerInterface;
 use Symfony\Component\DependencyInjection\Container;
+use TYPO3\CMS\Core\Cache\CacheManager;
 use TYPO3\CMS\Core\Clock\RequestClock;
+use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Core\Bootstrap;
 use TYPO3\CMS\Core\Core\RequestId;
 use TYPO3\CMS\Core\Core\SystemEnvironmentBuilder;
 use TYPO3\CMS\Core\Log\LogManager;
+use TYPO3\CMS\Core\Messaging\FlashMessageService;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -28,7 +31,12 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  * request id with its CSP nonce, the clock, the time globals. That must not
  * survive the request.
  *
- * So right after the boot this class records what exists at that point:
+ * So right after a boot this class records what exists at that point. It
+ * keeps the second boot of the worker, not the first: a boot from cold
+ * caches (after a deployment or a cache flush) also instantiates request
+ * services while it builds TCA and the configuration, and those must not
+ * become boot state. The first request warms the caches with a boot of its
+ * own, which is then dropped. What it records:
  *
  * - the services the container holds (`services` and `privates`), which are
  *   the externally set ones from Bootstrap::init() (`_early.*`, the service
@@ -58,10 +66,37 @@ final class PersistentBootstrap
 {
     public const ENV = 'KOH_PERSISTENT_BOOTSTRAP';
 
+    /** The boot whose state is kept: the first one that could run on warm caches. */
+    private const BOOTS_BEFORE_KEEPING = 2;
+
+    /**
+     * Request services never kept, even if a boot instantiated them: a runtime
+     * cache or CacheManager carried into the next request would hand it the
+     * previous request's runtime entries.
+     */
+    private const NEVER_KEPT = [
+        'cache.runtime',
+        CacheManager::class,
+        Context::class,
+        FlashMessageService::class,
+    ];
+
     /** Superglobals FrankenPHP fills for each request; never recorded or restored. */
     private const SUPERGLOBALS = ['GLOBALS', '_GET', '_POST', '_COOKIE', '_FILES', '_SERVER', '_ENV', '_REQUEST', '_SESSION', 'argv', 'argc'];
 
     private ?Container $container = null;
+
+    /** Boots so far in this worker. */
+    private int $boots = 0;
+
+    /**
+     * The globals that existed right after the first boot. The kept boot
+     * runs after a request, so only these are recorded: what that request
+     * added to the globals is not boot state.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $firstBootGlobals = null;
 
     /** @var array<string, mixed> */
     private array $bootServices = [];
@@ -135,8 +170,24 @@ final class PersistentBootstrap
             return [$kept, true];
         }
 
+        if ($this->firstBootGlobals !== null) {
+            // Booting again after a request: without the globals it added.
+            foreach (array_keys($GLOBALS) as $name) {
+                if (!isset($this->firstBootGlobals[$name]) && !in_array($name, self::SUPERGLOBALS, true)) {
+                    unset($GLOBALS[$name]);
+                }
+            }
+        }
         $container = ($this->boot)($classLoader);
-        if ($container instanceof Container && $this->bootCompleted($container)) {
+        ++$this->boots;
+        $this->firstBootGlobals ??= array_fill_keys(array_keys(array_diff_key($GLOBALS, array_flip(self::SUPERGLOBALS))), true);
+        // The first boot of a worker may find TYPO3's caches cold (after a
+        // deployment, a cache flush). Building TCA and the configuration then
+        // instantiates request services as well (the runtime cache, the
+        // CacheManager, form framework services, ...), and they would be
+        // recorded as boot state. That boot serves its request and is
+        // dropped; the second boot runs on the caches the first one warmed.
+        if ($this->boots >= self::BOOTS_BEFORE_KEEPING && $container instanceof Container && $this->bootCompleted($container)) {
             $this->record($container);
         }
 
@@ -169,12 +220,18 @@ final class PersistentBootstrap
             $container,
             Container::class,
         )();
+        $neverKept = array_flip(self::NEVER_KEPT);
+        $this->bootServices = array_diff_key($this->bootServices, $neverKept);
+        $this->bootPrivates = array_diff_key($this->bootPrivates, $neverKept);
         $this->bootSingletons = \Closure::bind(
             static fn(): array => static::$singletonInstances,
             null,
             GeneralUtility::class,
         )();
         $this->bootGlobals = array_diff_key($GLOBALS, array_flip(self::SUPERGLOBALS));
+        if ($this->firstBootGlobals !== null) {
+            $this->bootGlobals = array_intersect_key($this->bootGlobals, $this->firstBootGlobals);
+        }
         $this->container = $container;
     }
 
