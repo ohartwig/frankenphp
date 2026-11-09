@@ -3,6 +3,12 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.9.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.8.0...v5.9.0) (2026-11-09)
+
+### :sparkles: Features
+
+* **worker:** time every frontend request, boot and render apart ([41d2c6b](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/41d2c6bc091aeb9f04ecda2ab626f62f1c50a9e6))
+
 ## [5.8.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.7.1...v5.8.0) (2026-11-09)
 
 ### :sparkles: Features
