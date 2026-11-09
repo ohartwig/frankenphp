@@ -5,6 +5,7 @@
     "type": "typo3-cms-extension",
     "require": {
         "typo3/cms-core": "^14.0",
+        "typo3/cms-extbase": "^14.0",
         "typo3/cms-frontend": "^14.0"
     },
     "autoload": {

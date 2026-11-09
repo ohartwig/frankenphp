@@ -47,6 +47,12 @@ php "$HERE/seed.php" "$PROJECT"
 vendor/bin/typo3 cache:flush
 
 echo "--- start FrankenPHP with one frontend worker"
+# Something already answering on the port would take the requests meant for
+# the worker started here, and the test would check another server.
+if curl -fsS -o /dev/null http://127.0.0.1:8080/healthz 2>/dev/null; then
+    echo "Port 8080 is already in use; stop the server running there first." >&2
+    exit 1
+fi
 WA_PROJECT_DIR="$PROJECT" MAX_REQUESTS=100000 \
     frankenphp run --config "$HERE/Caddyfile" --adapter caddyfile >"$LOG" 2>&1 &
 SERVER_PID=$!

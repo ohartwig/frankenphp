@@ -269,6 +269,47 @@ switches and repeats, and checks every response against its own request:
 - absolute links to the page itself and to the other page of the site, from
   PHP and from TypoScript `typolink`.
 
+A second group of checks covers the state TYPO3 builds up during a request
+and would keep if the bootstrap were shared between requests:
+
+1. **Context aspects:** the language aspect (id, content id, overlay type,
+   fallback chain; English is configured with `fallbackType: fallback`, so
+   the two languages differ in all four), the visibility aspect (nothing
+   hidden or deleted included), the `frontend.user` and `backend.user`
+   aspects (nobody logged in), and the request time: the date aspect's
+   timestamp, `EXEC_TIME` and `SIM_EXEC_TIME` must fall within the seconds
+   the request was under way and never go backwards. The runner pauses for
+   just over a second twice, so a time kept from an earlier request cannot
+   pass for a fresh one.
+2. **Extbase:** `findByUid()` on a small repository over a test table with one
+   greeting per site and language. A persistence session kept from an
+   earlier request would answer from its identity map, in that request's
+   language.
+3. **PageRenderer and AssetCollector:** each page adds a meta tag, inline
+   JavaScript and a style sheet through PageRenderer, and inline JavaScript
+   and a style sheet through AssetCollector, all keyed by page and language.
+   The response must contain each exactly once, for its own page, and
+   exactly one `<title>`, its own.
+4. **Language-dependent data loaded in a constructor**, the way glossary
+   parsers load their terms: once in a `SingletonInterface` object created
+   through `makeInstance()`, once in a shared service of the DI container.
+   Both must hold the terms of the request's language.
+5. **A static property a constructor appends to**, as
+   `featdd/dpn_glossary`'s `ParserService` does: its length must not change
+   from request to request. *Informational:* this check only warns, see
+   below.
+6. **The global request at the end of rendering:** `$GLOBALS['TYPO3_REQUEST']`
+   and its `frontend.page.information` page id, read by the last `USER_INT`
+   of the page and by a middleware after the page has been rendered, must be
+   this request's.
+
+The current worker, which bootstraps TYPO3 for every request, passes checks
+1 to 4 and 6. It does not pass check 5: nothing resets static properties, so
+the appended string grows by one piece with every request. The test reports
+that as a warning and does not fail; making it a failure is a TODO for the
+change that keeps the bootstrap, which has to decide how such state is
+reset. A switch for a shared bootstrap must keep every other check passing.
+
 The markers come from a `USER_INT` with `config.no_cache = 1`, so every
 request runs the full render path. Each response also carries a token and a
 request counter that live in a static property of the worker: the run only
