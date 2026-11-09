@@ -1,0 +1,13 @@
+name: koh/worker-alternation-forms
+label: 'Worker alternation test forms'
+priority: 200
+
+persistenceManager:
+  allowedExtensionPaths:
+    10: EXT:worker_alternation_markers/Resources/Private/Forms/
+
+prototypes:
+  standard:
+    finishersDefinition:
+      RecordRequest:
+        implementationClassName: 'Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\Finishers\RecordRequestFinisher'

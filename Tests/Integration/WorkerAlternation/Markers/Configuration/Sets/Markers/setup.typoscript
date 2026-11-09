@@ -64,3 +64,26 @@ page {
     100 = TEXT
     100.value = <!--worker-alternation-late-->
 }
+
+# Forms of the form framework, rendered on the page itself (no content
+# element needed): the single-page form on the second page of each site, the
+# two-page form on the root page.
+lib.workerAlternationForm = EXTBASEPLUGIN
+lib.workerAlternationForm {
+    extensionName = Form
+    pluginName = Formframework
+}
+
+[site("identifier") == "site-a" && page["uid"] == 2]
+    page.40 < lib.workerAlternationForm
+    page.40.settings.persistenceIdentifier = EXT:worker_alternation_markers/Resources/Private/Forms/wa-contact-a.form.yaml
+[site("identifier") == "site-b" && page["uid"] == 11]
+    page.40 < lib.workerAlternationForm
+    page.40.settings.persistenceIdentifier = EXT:worker_alternation_markers/Resources/Private/Forms/wa-contact-b.form.yaml
+[site("identifier") == "site-a" && page["uid"] == 1]
+    page.40 < lib.workerAlternationForm
+    page.40.settings.persistenceIdentifier = EXT:worker_alternation_markers/Resources/Private/Forms/wa-steps-a.form.yaml
+[site("identifier") == "site-b" && page["uid"] == 10]
+    page.40 < lib.workerAlternationForm
+    page.40.settings.persistenceIdentifier = EXT:worker_alternation_markers/Resources/Private/Forms/wa-steps-b.form.yaml
+[END]

@@ -1,2 +1,4 @@
 name: koh/worker-alternation-markers
 label: 'Worker alternation test markers'
+dependencies:
+  - typo3/form

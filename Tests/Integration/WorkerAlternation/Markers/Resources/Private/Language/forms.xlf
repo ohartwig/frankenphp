@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+    <file source-language="en" datatype="plaintext" original="messages" date="2026-11-09T00:00:00Z" product-name="worker_alternation_markers">
+        <body>
+            <trans-unit id="element.name.properties.label" resname="element.name.properties.label">
+                <source>Name</source>
+            </trans-unit>
+            <trans-unit id="element.email.properties.label" resname="element.email.properties.label">
+                <source>Email address</source>
+            </trans-unit>
+            <trans-unit id="element.topic.properties.label" resname="element.topic.properties.label">
+                <source>Topic</source>
+            </trans-unit>
+            <trans-unit id="element.topic.properties.options." resname="element.topic.properties.options.">
+                <source>Please choose</source>
+            </trans-unit>
+            <trans-unit id="element.topic.properties.options.hosting" resname="element.topic.properties.options.hosting">
+                <source>Hosting</source>
+            </trans-unit>
+            <trans-unit id="element.topic.properties.options.support" resname="element.topic.properties.options.support">
+                <source>Support</source>
+            </trans-unit>
+            <trans-unit id="element.message.properties.label" resname="element.message.properties.label">
+                <source>Message</source>
+            </trans-unit>
+            <trans-unit id="validation.error.1221560718" resname="validation.error.1221560718">
+                <source>WA-ERROR-EN: this field is required</source>
+            </trans-unit>
+            <trans-unit id="validation.error.1221560910" resname="validation.error.1221560910">
+                <source>WA-ERROR-EN: this field is required</source>
+            </trans-unit>
+            <trans-unit id="validation.error.1221559976" resname="validation.error.1221559976">
+                <source>WA-ERROR-EN: not a valid email address</source>
+            </trans-unit>
+            <trans-unit id="wa-contact-a.renderingOptions.submitButtonLabel" resname="wa-contact-a.renderingOptions.submitButtonLabel">
+                <source>Send</source>
+            </trans-unit>
+            <trans-unit id="wa-contact-a.finisher.Confirmation.message" resname="wa-contact-a.finisher.Confirmation.message">
+                <source>WA-CONFIRMATION site-a en: thank you, Site A received your contact form.</source>
+            </trans-unit>
+            <trans-unit id="wa-steps-a.renderingOptions.submitButtonLabel" resname="wa-steps-a.renderingOptions.submitButtonLabel">
+                <source>Send</source>
+            </trans-unit>
+            <trans-unit id="wa-steps-a.finisher.Confirmation.message" resname="wa-steps-a.finisher.Confirmation.message">
+                <source>WA-CONFIRMATION site-a en: thank you, Site A received your steps form.</source>
+            </trans-unit>
+            <trans-unit id="wa-contact-b.renderingOptions.submitButtonLabel" resname="wa-contact-b.renderingOptions.submitButtonLabel">
+                <source>Send</source>
+            </trans-unit>
+            <trans-unit id="wa-contact-b.finisher.Confirmation.message" resname="wa-contact-b.finisher.Confirmation.message">
+                <source>WA-CONFIRMATION site-b en: thank you, Site B received your contact form.</source>
+            </trans-unit>
+            <trans-unit id="wa-steps-b.renderingOptions.submitButtonLabel" resname="wa-steps-b.renderingOptions.submitButtonLabel">
+                <source>Send</source>
+            </trans-unit>
+            <trans-unit id="wa-steps-b.finisher.Confirmation.message" resname="wa-steps-b.finisher.Confirmation.message">
+                <source>WA-CONFIRMATION site-b en: thank you, Site B received your steps form.</source>
+            </trans-unit>
+        </body>
+    </file>
+</xliff>

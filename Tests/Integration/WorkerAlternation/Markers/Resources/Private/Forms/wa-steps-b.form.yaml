@@ -1,0 +1,48 @@
+# Two-page form of site-b: the name entered on the first page travels to
+# the second only inside the HMAC-signed __state.
+type: Form
+identifier: wa-steps-b
+label: 'Worker alternation two-step form, site b'
+prototypeName: standard
+renderingOptions:
+  submitButtonLabel: 'SUBMIT-UNTRANSLATED'
+  translation:
+    translationFiles:
+      20: 'EXT:worker_alternation_markers/Resources/Private/Language/forms.xlf'
+finishers:
+  - identifier: SaveToDatabase
+    options:
+      table: 'tx_workeralternationmarkers_submission'
+      mode: insert
+      databaseColumnMappings:
+        form:
+          value: 'wa-steps-b'
+      elements:
+        name:
+          mapOnDatabaseColumn: 'name'
+        email:
+          mapOnDatabaseColumn: 'email'
+  - identifier: RecordRequest
+  - identifier: Confirmation
+    options:
+      message: 'CONFIRMATION-UNTRANSLATED'
+renderables:
+  - type: Page
+    identifier: step-1
+    label: ''
+    renderables:
+      - type: Text
+        identifier: name
+        label: 'NAME-UNTRANSLATED'
+        validators:
+          - identifier: NotEmpty
+  - type: Page
+    identifier: step-2
+    label: ''
+    renderables:
+      - type: Text
+        identifier: email
+        label: 'EMAIL-UNTRANSLATED'
+        validators:
+          - identifier: NotEmpty
+          - identifier: EmailAddress

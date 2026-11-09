@@ -1,0 +1,64 @@
+# Single-page form of site-a, modelled on the intake forms of the real
+# sites. Every visible text comes from forms.xlf / de.forms.xlf; the
+# UNTRANSLATED defaults below only show if translation fails.
+type: Form
+identifier: wa-contact-a
+label: 'Worker alternation contact form, site a'
+prototypeName: standard
+renderingOptions:
+  submitButtonLabel: 'SUBMIT-UNTRANSLATED'
+  translation:
+    translationFiles:
+      20: 'EXT:worker_alternation_markers/Resources/Private/Language/forms.xlf'
+finishers:
+  - identifier: SaveToDatabase
+    options:
+      table: 'tx_workeralternationmarkers_submission'
+      mode: insert
+      databaseColumnMappings:
+        form:
+          value: 'wa-contact-a'
+      elements:
+        name:
+          mapOnDatabaseColumn: 'name'
+        email:
+          mapOnDatabaseColumn: 'email'
+        topic:
+          mapOnDatabaseColumn: 'topic'
+        message:
+          mapOnDatabaseColumn: 'message'
+  - identifier: RecordRequest
+  - identifier: Confirmation
+    options:
+      message: 'CONFIRMATION-UNTRANSLATED'
+renderables:
+  - type: Page
+    identifier: page-1
+    label: ''
+    renderables:
+      - type: Text
+        identifier: name
+        label: 'NAME-UNTRANSLATED'
+        validators:
+          - identifier: NotEmpty
+      - type: Text
+        identifier: email
+        label: 'EMAIL-UNTRANSLATED'
+        validators:
+          - identifier: NotEmpty
+          - identifier: EmailAddress
+      - type: SingleSelect
+        identifier: topic
+        label: 'TOPIC-UNTRANSLATED'
+        properties:
+          options:
+            '': 'CHOOSE-UNTRANSLATED'
+            hosting: 'HOSTING-UNTRANSLATED'
+            support: 'SUPPORT-UNTRANSLATED'
+        validators:
+          - identifier: NotEmpty
+      - type: Textarea
+        identifier: message
+        label: 'MESSAGE-UNTRANSLATED'
+        validators:
+          - identifier: NotEmpty

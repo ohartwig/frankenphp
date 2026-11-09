@@ -5,7 +5,7 @@ declare(strict_types=1);
 /*
  * Sends alternating requests for two sites and two languages to a FrankenPHP
  * instance with ONE frontend worker and checks that every response describes
- * its own request. Usage: php check.php [server-ip] [port]
+ * its own request. Usage: php check.php <server-ip> <port> <project-dir>
  *
  * Every response carries the markers MarkerRenderer and the TypoScript of the
  * markers site set render. Each marker must equal what the request that
@@ -18,12 +18,26 @@ declare(strict_types=1);
  * its own PageRenderer and AssetCollector assets (no other page's, no
  * duplicates), and a request time from the seconds it was under way.
  *
+ * Between the page requests it fills in forms of the form framework on both
+ * sites and in both languages (see the form scenarios below), POSTs that run
+ * through the same worker and the same checks, and reads the project's
+ * database to see what the finishers stored.
+ *
  * Exit code 0 on success, 1 on any mismatch. Warnings (the static-append
  * probe) are printed but do not change the exit code.
  */
 
 $ip = $argv[1] ?? '127.0.0.1';
 $port = (int) ($argv[2] ?? 8080);
+$projectDir = rtrim((string) ($argv[3] ?? ''), '/');
+$settings = is_file($projectDir . '/config/system/settings.php') ? require $projectDir . '/config/system/settings.php' : [];
+$databasePath = (string) ($settings['DB']['Connections']['Default']['path'] ?? '');
+if ($databasePath === '' || !is_file($databasePath)) {
+    fwrite(STDERR, "No SQLite database found for project '$projectDir'.\n");
+    exit(2);
+}
+$database = new PDO('sqlite:' . $databasePath);
+$database->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 $sites = [
     'site-a' => ['host' => 'site-a.test', 'label' => 'Site A', 'pages' => [1 => 2, 2 => 1]],
@@ -183,34 +197,89 @@ $firstCount = null;
 $lastCount = null;
 $tokens = [];
 $pids = [];
+$number = 0;
+$posts = 0;
+// Every value a form submission has sent so far; none may show up in a later
+// response that did not send it itself.
+$submitted = [];
 $started = microtime(true);
 
-foreach ($sequence as $number => $key) {
+/**
+ * One request through the worker, with every per-request check. GET when
+ * $post is null, otherwise a multipart POST of $post to $url (a form action
+ * of the page $key). Returns the body of a 200 response, null otherwise.
+ *
+ * With $strict false (a submission that must be refused) any status is
+ * accepted and only the worker markers are checked, if the page has them.
+ *
+ * @param array<string, string>|null $post
+ * @param list<string>               $ownValues submitted values this response may contain
+ * @return array{status: int, body: string}|string|null
+ */
+$send = function (string $key, ?string $url = null, ?array $post = null, array $ownValues = [], bool $strict = true) use (
+    &$failures, &$warnings, &$appendLength, &$previousTimestamp, &$token, &$firstCount, &$lastCount,
+    &$tokens, &$pids, &$number, &$posts, &$submitted, $targets, $curl,
+): array|string|null {
     $target = $targets[$key];
-    $label = sprintf('#%d %s (%s)', $number + 1, $target['url'], $key);
+    $url ??= $target['url'];
+    $label = sprintf('#%d %s %s (%s)', $number + 1, $post === null ? 'GET' : 'POST', $url, $key);
     // Twice in the run, let the clock move on by more than a second, so a
     // request time kept from an earlier request cannot pass for a fresh one.
     if ($number === 1 || $number === 48) {
         usleep(1_100_000);
     }
-    curl_setopt($curl, CURLOPT_URL, $target['url']);
+    curl_setopt($curl, CURLOPT_URL, $url);
+    if ($post === null) {
+        curl_setopt($curl, CURLOPT_HTTPGET, true);
+    } else {
+        curl_setopt($curl, CURLOPT_POSTFIELDS, $post);
+        ++$posts;
+    }
     $before = time();
     $body = curl_exec($curl);
     $after = time();
     $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+    ++$number;
 
-    if (!is_string($body) || $status !== 200) {
-        $failures[] = sprintf('%s: HTTP %d%s', $label, $status, is_string($body) ? ', body: ' . substr(trim($body), 0, 300) : ', ' . curl_error($curl));
-        continue;
-    }
-
-    preg_match_all('#<li data-marker="([^"]+)">(.*?)</li>#s', $body, $matches, PREG_SET_ORDER);
+    preg_match_all('#<li data-marker="([^"]+)">(.*?)</li>#s', is_string($body) ? $body : '', $matches, PREG_SET_ORDER);
     $markers = [];
     foreach ($matches as [, $name, $value]) {
         $markers[$name] = html_entity_decode($value, ENT_QUOTES | ENT_HTML5);
     }
 
-    foreach ($target['expected'] as $name => $expected) {
+    // One worker for the whole run: same token, and the count it rendered
+    // one up from the last page it rendered.
+    if (isset($markers['worker.count'])) {
+        $count = (int) $markers['worker.count'];
+        $token ??= $markers['worker.token'] ?? null;
+        $firstCount ??= $count;
+        if (($markers['worker.token'] ?? null) !== $token) {
+            $failures[] = sprintf('%s: served by another worker (token %s, first request had %s)', $label, var_export($markers['worker.token'] ?? null, true), var_export($token, true));
+        }
+        if ($lastCount !== null && $count !== $lastCount + 1) {
+            $failures[] = sprintf('%s: worker request count is %d, expected %d; the worker restarted or another one answered', $label, $count, $lastCount + 1);
+        }
+        $lastCount = $count;
+        $tokens[$markers['worker.token'] ?? '?'] = true;
+        $pids[$markers['worker.pid'] ?? '?'] = true;
+    }
+
+    if (!$strict) {
+        return ['status' => $status, 'body' => is_string($body) ? $body : ''];
+    }
+    if (!is_string($body) || $status !== 200) {
+        $failures[] = sprintf('%s: HTTP %d%s', $label, $status, is_string($body) ? ', body: ' . substr(trim($body), 0, 300) : ', ' . curl_error($curl));
+
+        return null;
+    }
+    if (!isset($markers['worker.count'])) {
+        $failures[] = sprintf('%s: page without worker markers', $label);
+    }
+
+    $expectedMarkers = $target['expected'];
+    // A form is posted to its action, the page URL with the plugin's query.
+    $expectedMarkers['indpenv.request_uri'] = (string) parse_url($url, PHP_URL_PATH) . (parse_url($url, PHP_URL_QUERY) !== null ? '?' . parse_url($url, PHP_URL_QUERY) : '');
+    foreach ($expectedMarkers as $name => $expected) {
         $actual = $markers[$name] ?? null;
         if ($actual !== $expected) {
             $failures[] = sprintf(
@@ -258,37 +327,420 @@ foreach ($sequence as $number => $key) {
         }
     }
 
+    // Nothing an earlier form submission sent, unless this request sent it.
+    foreach (array_diff($submitted, $ownValues) as $value) {
+        if (str_contains($body, $value)) {
+            $failures[] = sprintf('%s: form value %s of an earlier submission is in the response', $label, var_export($value, true));
+        }
+    }
+
     // A static property a constructor appends to (AppendingParser). The
     // worker does not reset static properties, so on a per-request bootstrap
     // this grows with every request; it is reported, not failed.
-    // TODO: make this a failure once the persistent-bootstrap change keeps
-    // such singletons, or resets their static state, between requests.
+    // TODO: make this a failure once static state can be reset safely
+    // between requests.
     $length = $markers['static.append_length'] ?? null;
     $appendLength ??= $length;
     if ($length !== $appendLength) {
         $warnings[] = sprintf('%s: static.append_length is %s, the first request had %s', $label, var_export($length, true), var_export($appendLength, true));
     }
 
-    // One worker for the whole run: same token, count up by one per request.
-    $count = (int) ($markers['worker.count'] ?? 0);
-    $token ??= $markers['worker.token'] ?? null;
-    $firstCount ??= $count;
-    if (($markers['worker.token'] ?? null) !== $token) {
-        $failures[] = sprintf('%s: served by another worker (token %s, first request had %s)', $label, var_export($markers['worker.token'] ?? null, true), var_export($token, true));
+    return $body;
+};
+
+/**
+ * The form in a page as a browser would submit it: its action, and every
+ * input, select, textarea and the forward submit button with their values
+ * (hidden fields, the honeypot, __state, __trustedProperties).
+ *
+ * @return array{action: string, fields: array<string, string>, values: array<string, string>, state: string}|null
+ */
+$parseForm = static function (string $body, string $base): ?array {
+    if (!preg_match('#<form\b[^>]*\baction="([^"]*)"[^>]*>(.*?)</form>#s', $body, $form)) {
+        return null;
     }
-    if ($count !== $firstCount + $number) {
-        $failures[] = sprintf('%s: worker request count is %d, expected %d; the worker restarted or another one answered', $label, $count, $firstCount + $number);
+    $fields = [];
+    $values = [];
+    preg_match_all('#<input\b([^>]*)>#s', $form[2], $inputs);
+    foreach ($inputs[1] as $attributes) {
+        if (!preg_match('#\bname="([^"]*)"#', $attributes, $name)) {
+            continue;
+        }
+        preg_match('#\bvalue="([^"]*)"#', $attributes, $value);
+        $fields[html_entity_decode($name[1])] = html_entity_decode($value[1] ?? '');
+        if (!str_contains($attributes, 'type="hidden"')) {
+            $values[html_entity_decode($name[1])] = html_entity_decode($value[1] ?? '');
+        }
     }
-    $lastCount = $count;
-    $tokens[$markers['worker.token'] ?? '?'] = true;
-    $pids[$markers['worker.pid'] ?? '?'] = true;
+    preg_match_all('#<textarea\b[^>]*\bname="([^"]*)"[^>]*>(.*?)</textarea>#s', $form[2], $textareas, PREG_SET_ORDER);
+    foreach ($textareas as [, $name, $value]) {
+        $fields[html_entity_decode($name)] = html_entity_decode($value);
+        $values[html_entity_decode($name)] = html_entity_decode($value);
+    }
+    preg_match_all('#<select\b[^>]*\bname="([^"]*)"[^>]*>(.*?)</select>#s', $form[2], $selects, PREG_SET_ORDER);
+    foreach ($selects as [, $name, $options]) {
+        $selected = preg_match('#<option\b[^>]*value="([^"]*)"[^>]*selected#', $options, $option) ? $option[1] : '';
+        $fields[html_entity_decode($name)] = html_entity_decode($selected);
+        $values[html_entity_decode($name)] = html_entity_decode($selected);
+    }
+    // The submit button that moves forward: the highest __currentPage.
+    preg_match_all('#<button\b[^>]*\bname="([^"]*__currentPage[^"]*)"[^>]*\bvalue="(\d+)"#', $form[2], $buttons, PREG_SET_ORDER);
+    usort($buttons, static fn(array $x, array $y): int => (int) $y[2] <=> (int) $x[2]);
+    if ($buttons !== []) {
+        $fields[html_entity_decode($buttons[0][1])] = $buttons[0][2];
+    }
+    $state = '';
+    foreach ($fields as $name => $value) {
+        if (str_ends_with($name, '[__state]')) {
+            $state = $value;
+        }
+    }
+
+    return [
+        'action' => $base . html_entity_decode($form[1]),
+        'fields' => $fields,
+        'values' => $values,
+        'state' => $state,
+    ];
+};
+
+/** The serialised form state inside __state, without its HMAC. */
+$decodeState = static function (string $state): string {
+    return (string) base64_decode(substr($state, 0, -64), true);
+};
+
+/**
+ * @param array<string, string> $fields
+ * @param array<string, string> $data   element identifier => value
+ * @return array<string, string>
+ */
+$fill = static function (array $fields, array $data): array {
+    foreach ($fields as $name => $value) {
+        if (preg_match('#\[([^\[\]]+)\]$#', $name, $element) && array_key_exists($element[1], $data)) {
+            $fields[$name] = $data[$element[1]];
+        }
+    }
+
+    return $fields;
+};
+
+/** The confirmation text in a page, for failure messages. */
+$confirmationIn = static function (string $body): string {
+    return preg_match('#[^<>]*CONFIRMATION[^<>]*#', $body, $text) ? var_export(trim($text[0]), true) : 'none';
+};
+
+$rowCount = static function () use ($database): int {
+    return (int) $database->query('SELECT COUNT(*) FROM tx_workeralternationmarkers_submission')->fetchColumn();
+};
+
+/** @return array<string, mixed> */
+$lastRow = static function () use ($database): array {
+    $row = $database->query('SELECT form, name, email, topic, message, site, language, host FROM tx_workeralternationmarkers_submission ORDER BY uid DESC LIMIT 1')->fetch(PDO::FETCH_ASSOC);
+
+    return is_array($row) ? $row : [];
+};
+
+$fail = function (string $message) use (&$failures, &$number): void {
+    $failures[] = sprintf('#%d form: %s', $number, $message);
+};
+
+/**
+ * Form scenarios, one request per step, run between the page requests. The
+ * order interleaves both hosts and both languages, and leaves requests to the
+ * other host between the two steps of a two-page form.
+ */
+$scenario = [];
+$languageOf = ['de' => 0, 'en' => 1];
+$errorText = ['de' => ['WA-ERROR-DE: Dieses Feld ist ein Pflichtfeld', 'WA-ERROR-DE: keine gültige E-Mail-Adresse'], 'en' => ['WA-ERROR-EN: this field is required', 'WA-ERROR-EN: not a valid email address']];
+$forms = [];
+$contact = function (string $identifier, string $code) use (&$forms, &$submitted, $send, $parseForm, $fill, $rowCount, $lastRow, $fail, $decodeState, $confirmationIn, $sites, $languageOf, $errorText, $port): array {
+    $pageId = $identifier === 'site-a' ? 2 : 11;
+    $key = "$identifier/$code/$pageId";
+    $base = 'http://' . $sites[$identifier]['host'] . ':' . $port;
+    $tag = "$identifier-$code";
+
+    return [
+        // Fetch the empty form.
+        function () use (&$forms, $key, $base, $tag, $send, $parseForm, $fail): void {
+            $body = $send($key);
+            $form = $body === null ? null : $parseForm($body, $base);
+            if ($form === null) {
+                $fail("$key: no form in the page");
+
+                return;
+            }
+            $forms[$tag] = $form;
+        },
+        // Invalid: required name missing, an address that is none.
+        function () use (&$forms, &$submitted, &$number, $key, $base, $tag, $code, $send, $parseForm, $fill, $rowCount, $fail, $errorText): void {
+            $form = $forms[$tag] ?? null;
+            if ($form === null) {
+                return;
+            }
+            $email = sprintf('not-an-address-r%d-%s', $number + 1, $tag);
+            $message = sprintf('Message r%d %s invalid', $number + 1, $tag);
+            $rows = $rowCount();
+            $body = $send($key, $form['action'], $fill($form['fields'], ['name' => '', 'email' => $email, 'topic' => 'hosting', 'message' => $message]), [$email, $message]);
+            $submitted[] = $email;
+            $submitted[] = $message;
+            if ($body === null) {
+                return;
+            }
+            foreach ($errorText[$code] as $text) {
+                if (!str_contains($body, htmlspecialchars($text))) {
+                    $fail("$key: invalid submission does not show '$text'");
+                }
+            }
+            foreach ($errorText[$code === 'de' ? 'en' : 'de'] as $text) {
+                if (str_contains($body, htmlspecialchars($text))) {
+                    $fail("$key: invalid submission shows the other language's '$text'");
+                }
+            }
+            foreach ([$email, $message] as $value) {
+                if (!str_contains($body, htmlspecialchars($value))) {
+                    $fail("$key: invalid submission does not show its own value '$value' again");
+                }
+            }
+            if ($rowCount() !== $rows) {
+                $fail("$key: invalid submission stored a row");
+            }
+            $again = $parseForm($body, $base);
+            if ($again === null) {
+                $fail("$key: invalid submission shows no form");
+
+                return;
+            }
+            $forms[$tag] = $again;
+        },
+        // Valid, continuing from the error page as a browser would.
+        function () use (&$forms, &$submitted, &$number, $identifier, $code, $key, $tag, $send, $fill, $rowCount, $lastRow, $fail, $confirmationIn, $languageOf, $sites, $port): void {
+            $form = $forms[$tag] ?? null;
+            if ($form === null) {
+                return;
+            }
+            $values = [
+                'name' => sprintf('Name r%d %s', $number + 1, $tag),
+                'email' => sprintf('r%d.%s@example.org', $number + 1, $tag),
+                'topic' => 'support',
+                'message' => sprintf('Message r%d %s valid', $number + 1, $tag),
+            ];
+            $rows = $rowCount();
+            $body = $send($key, $form['action'], $fill($form['fields'], $values));
+            array_push($submitted, $values['name'], $values['email'], $values['message']);
+            if ($body === null) {
+                return;
+            }
+            $confirmation = sprintf('WA-CONFIRMATION %s %s:', $identifier, $code);
+            if (!str_contains($body, $confirmation)) {
+                $fail("$key: valid submission does not confirm with '$confirmation', it shows " . $confirmationIn($body));
+            }
+            if (preg_match_all('#WA-CONFIRMATION [a-z-]+ [a-z]+:#', $body) !== 1) {
+                $fail("$key: valid submission does not show exactly one confirmation");
+            }
+            if ($rowCount() !== $rows + 1) {
+                $fail(sprintf('%s: valid submission stored %d rows, expected 1', $key, $rowCount() - $rows));
+
+                return;
+            }
+            $expected = $values + [
+                'form' => 'wa-contact-' . substr($identifier, -1),
+                'site' => $identifier,
+                'language' => $languageOf[$code],
+                'host' => $sites[$identifier]['host'] . ':' . $port,
+            ];
+            $row = $lastRow();
+            foreach ($expected as $column => $value) {
+                if ((string) ($row[$column] ?? '') !== (string) $value) {
+                    $fail(sprintf('%s: stored %s is %s, expected %s', $key, $column, var_export($row[$column] ?? null, true), var_export($value, true)));
+                }
+            }
+            unset($forms[$tag]);
+        },
+        // Right after it, the same form on the other host: empty.
+        function () use ($identifier, $code, $send, $parseForm, $decodeState, $fail, $sites, $port): void {
+            $other = $identifier === 'site-a' ? 'site-b' : 'site-a';
+            $key = sprintf('%s/%s/%d', $other, $code, $other === 'site-a' ? 2 : 11);
+            $body = $send($key);
+            $form = $body === null ? null : $parseForm($body, 'http://' . $sites[$other]['host'] . ':' . $port);
+            if ($form === null) {
+                $fail("$key: no form in the page");
+
+                return;
+            }
+            foreach ($form['values'] as $name => $value) {
+                if ($value !== '') {
+                    $fail("$key: fresh form has $name prefilled with " . var_export($value, true));
+                }
+            }
+            if (!str_contains($decodeState($form['state']), 'formValues";a:0:{}')) {
+                $fail("$key: fresh form carries a state with values");
+            }
+        },
+    ];
+};
+
+$steps = function (string $identifier, string $code) use (&$forms, &$submitted, &$number, $send, $parseForm, $fill, $rowCount, $lastRow, $fail, $decodeState, $confirmationIn, $sites, $port, $languageOf): array {
+    $pageId = $identifier === 'site-a' ? 1 : 10;
+    $key = "$identifier/$code/$pageId";
+    $base = 'http://' . $sites[$identifier]['host'] . ':' . $port;
+    $tag = "steps-$identifier-$code";
+
+    return [
+        function () use (&$forms, $key, $base, $tag, $send, $parseForm, $fail): void {
+            $body = $send($key);
+            $form = $body === null ? null : $parseForm($body, $base);
+            if ($form === null) {
+                $fail("$key: no two-step form in the page");
+
+                return;
+            }
+            $forms[$tag] = $form;
+        },
+        // Step 1: the name, which from now on lives only in __state.
+        function () use (&$forms, &$submitted, &$number, $key, $base, $tag, $send, $parseForm, $fill, $decodeState, $fail): void {
+            $form = $forms[$tag] ?? null;
+            if ($form === null) {
+                return;
+            }
+            $name = sprintf('Step name r%d %s', $number + 1, $tag);
+            $body = $send($key, $form['action'], $fill($form['fields'], ['name' => $name]), [$name]);
+            $submitted[] = $name;
+            $next = $body === null ? null : $parseForm($body, $base);
+            if ($next === null || !isset(array_flip(array_map(static fn(string $n): string => preg_replace('#^.*\[([^\[\]]+)\]$#', '$1', $n), array_keys($next['values'])))['email'])) {
+                $fail("$key: step 1 does not lead to the email step");
+
+                return;
+            }
+            if (!str_contains($decodeState($next['state']), $name)) {
+                $fail("$key: the state after step 1 does not carry the name");
+            }
+            $forms[$tag] = $next + ['name' => $name];
+        },
+        // Step 2, after requests to the other host: finishes with step 1's name.
+        function () use (&$forms, &$submitted, &$number, $identifier, $code, $key, $tag, $send, $fill, $rowCount, $lastRow, $fail, $confirmationIn, $languageOf, $sites, $port): void {
+            $form = $forms[$tag] ?? null;
+            if ($form === null || !isset($form['name'])) {
+                return;
+            }
+            $email = sprintf('step.r%d.%s@example.org', $number + 1, $tag);
+            $rows = $rowCount();
+            $body = $send($key, $form['action'], $fill($form['fields'], ['email' => $email]), [$form['name']]);
+            $submitted[] = $email;
+            if ($body === null) {
+                return;
+            }
+            $confirmation = sprintf('WA-CONFIRMATION %s %s:', $identifier, $code);
+            if (!str_contains($body, $confirmation)) {
+                $fail("$key: step 2 does not confirm with '$confirmation', it shows " . $confirmationIn($body));
+            }
+            if ($rowCount() !== $rows + 1) {
+                $fail(sprintf('%s: step 2 stored %d rows, expected 1', $key, $rowCount() - $rows));
+
+                return;
+            }
+            $expected = [
+                'form' => 'wa-steps-' . substr($identifier, -1),
+                'name' => $form['name'],
+                'email' => $email,
+                'site' => $identifier,
+                'language' => $languageOf[$code],
+                'host' => $sites[$identifier]['host'] . ':' . $port,
+            ];
+            $row = $lastRow();
+            foreach ($expected as $column => $value) {
+                if ((string) ($row[$column] ?? '') !== (string) $value) {
+                    $fail(sprintf('%s: step 2 stored %s as %s, expected %s', $key, $column, var_export($row[$column] ?? null, true), var_export($value, true)));
+                }
+            }
+            unset($forms[$tag]);
+        },
+    ];
+};
+
+/**
+ * A submission whose __trustedProperties or __state was changed after
+ * signing: it must not be accepted (no confirmation, no row).
+ */
+$tampered = function (string $identifier, string $code, string $field) use ($send, $parseForm, $fill, $rowCount, $fail, $sites, $port, &$submitted, &$number): array {
+    $pageId = $identifier === 'site-a' ? 2 : 11;
+    $key = "$identifier/$code/$pageId";
+    $base = 'http://' . $sites[$identifier]['host'] . ':' . $port;
+    $form = null;
+
+    return [
+        function () use (&$form, $key, $base, $send, $parseForm, $fail): void {
+            $body = $send($key);
+            $form = $body === null ? null : $parseForm($body, $base);
+            if ($form === null) {
+                $fail("$key: no form in the page");
+            }
+        },
+        function () use (&$form, &$submitted, &$number, $key, $field, $identifier, $code, $send, $fill, $rowCount, $fail): void {
+            if ($form === null) {
+                return;
+            }
+            $fields = $fill($form['fields'], [
+                'name' => sprintf('Tampered r%d', $number + 1),
+                'email' => sprintf('tampered.r%d@example.org', $number + 1),
+                'topic' => 'support',
+                'message' => 'tampered',
+            ]);
+            foreach ($fields as $name => $value) {
+                if (str_ends_with($name, '[' . $field . ']')) {
+                    // Change the signed part, keep the signature.
+                    $fields[$name] = $field === '__state'
+                        ? base64_encode(str_replace('lastDisplayedPageIndex";i:0', 'lastDisplayedPageIndex";i:1', (string) base64_decode(substr($value, 0, -64)))) . substr($value, -64)
+                        : str_replace('"message":1', '"message":1,"uid":1', substr($value, 0, -64)) . substr($value, -64);
+                }
+            }
+            $rows = $rowCount();
+            $label = sprintf('%s: submission with a changed %s', $key, $field);
+            $response = $send($key, $form['action'], $fields, [], false);
+            $body = is_array($response) ? $response['body'] : '';
+            $status = is_array($response) ? $response['status'] : 0;
+            if (str_contains($body, 'WA-CONFIRMATION')) {
+                $fail("$label was confirmed (HTTP $status)");
+            }
+            if ($rowCount() !== $rows) {
+                $fail("$label was stored (HTTP $status)");
+            }
+        },
+    ];
+};
+
+$queue = array_merge(
+    // site A German and site B English, single-page, interleaved step by step
+    ...array_map(null, $contact('site-a', 'de'), $contact('site-b', 'en')),
+);
+$twoStep = [$steps('site-a', 'en'), $steps('site-b', 'de')];
+$queue = array_merge(
+    $queue,
+    [$twoStep[0][0], $twoStep[0][1]],
+    // requests to the other host between step 1 and step 2 of site A
+    ...array_map(null, $contact('site-b', 'de'), [$twoStep[1][0], $twoStep[1][1], $twoStep[1][2], static fn() => null]),
+);
+$queue[] = $twoStep[0][2];
+$queue = array_merge($queue, $contact('site-a', 'en'), $tampered('site-a', 'de', '__trustedProperties'), $tampered('site-b', 'en', '__state'));
+$queue = array_values(array_filter($queue));
+
+// The page requests, with a form step after every second one.
+foreach ($sequence as $position => $key) {
+    $send($key);
+    if ($position % 2 === 1 && $queue !== []) {
+        (array_shift($queue))();
+    }
+}
+while ($queue !== []) {
+    (array_shift($queue))();
 }
 
 $seconds = microtime(true) - $started;
-$total = count($sequence);
+$total = $number;
 printf(
-    "%d requests over %d targets (2 hosts x 2 languages x 2 pages) in %.1f s; worker token(s) %s, worker request count %s..%s, PID(s) %s\n",
+    "%d requests (%d page requests, %d form submissions) over %d targets (2 hosts x 2 languages x 2 pages) in %.1f s; worker token(s) %s, worker request count %s..%s, PID(s) %s\n",
     $total,
+    count($sequence),
+    $posts,
     count($targets),
     $seconds,
     implode(',', array_keys($tokens)),
@@ -312,7 +764,7 @@ if ($failures !== []) {
     // Which checks failed, over the whole run; the details below are cut short.
     $byCheck = [];
     foreach ($failures as $failure) {
-        $check = preg_replace(['#^\#\d+ \S+ \([^)]+\): #', '#^(marker \S+|asset \S+|<title>|HTTP \d+|served by another worker|worker request count).*$#s'], ['', '$1'], $failure);
+        $check = preg_replace(['#^\#\d+ (GET|POST) \S+ \([^)]+\): #', '#^\#\d+ form: \S+: #', '#^(marker \S+|asset \S+|<title>|HTTP \d+|served by another worker|worker request count|form value).*$#s'], ['', 'form: ', '$1'], $failure);
         $byCheck[$check] = ($byCheck[$check] ?? 0) + 1;
     }
     arsort($byCheck);

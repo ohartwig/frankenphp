@@ -15,3 +15,8 @@ services:
 
   Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\LateStateMiddleware:
     public: true
+
+  # Instantiated per submission by the form framework (finishersDefinition).
+  Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\Finishers\RecordRequestFinisher:
+    public: true
+    shared: false
