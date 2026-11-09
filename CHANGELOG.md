@@ -3,6 +3,23 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.10.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.9.0...v5.10.0) (2026-11-09)
+
+### :sparkles: Features
+
+* **worker:** boot TYPO3 once per worker behind KOH_PERSISTENT_BOOTSTRAP ([6e79c8c](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/6e79c8cf82025a33856c05d67c7e7986e8ff10e4))
+
+### :bug: Fixes
+
+* **worker:** check the language path only for non-default languages ([8eec8b3](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/8eec8b319fa1c64dd96dab8763dab4578a616027))
+
+### :white_check_mark: Tests
+
+* **worker:** pin the leak response and the reset after the loop ([49309b1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/49309b16593fbd709d8b6bdbce2991542600e3a1))
+* **worker:** cover the persistent bootstrap in the worker loop ([bf04562](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/bf04562b26365fb132645ddf3b72b23be5b9edcf))
+* check the request state a shared bootstrap would keep ([1e4d6fe](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/1e4d6fe14fef6534a6f8cec6c369ceb035d0582c))
+* prove one worker answers alternating sites and languages correctly ([70328d6](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/70328d60b83873f6a6cf79527dc6820e1b97a632))
+
 ## [5.9.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.8.0...v5.9.0) (2026-11-09)
 
 ### :sparkles: Features
