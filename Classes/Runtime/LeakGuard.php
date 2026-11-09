@@ -20,8 +20,12 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  *   request, against the same value computed afresh (see staleIndpEnv());
  * - `global_request_host`: $GLOBALS['TYPO3_REQUEST'];
  * - `language_host`, `language_path`: the base of the site language TYPO3
- *   resolved, which must have the request's host (when it names one) and
- *   be a prefix of the request's path.
+ *   resolved, which must have the request's host (when it names one) and,
+ *   for a language other than the default, be a prefix of the request's
+ *   path. The default language is also what TYPO3 resolves for paths
+ *   outside every language base - a static route such as /robots.txt, or
+ *   / when the default language lives under /de/ - so its path is no
+ *   evidence of a leak.
  *
  * Hosts compare without port and case, paths decoded and without case. A
  * missing global request is no finding: a request can end before TYPO3 sets
@@ -66,7 +70,7 @@ final class LeakGuard
             return self::finding('language_host', $host, $base->getHost());
         }
         $basePath = rtrim(self::path($base->getPath()), '/');
-        if ($basePath !== '' && $path !== $basePath && !str_starts_with($path, $basePath . '/')) {
+        if ($language->getLanguageId() > 0 && $basePath !== '' && $path !== $basePath && !str_starts_with($path, $basePath . '/')) {
             return self::finding('language_path', $path, (string) $base);
         }
 

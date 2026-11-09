@@ -43,11 +43,11 @@ final class LeakGuardTest extends TestCase
         return ['HTTP_HOST' => $host, 'REQUEST_URI' => $uri];
     }
 
-    private static function request(string $url, ?string $languageBase = null): ServerRequest
+    private static function request(string $url, ?string $languageBase = null, int $languageId = 1): ServerRequest
     {
         $request = new ServerRequest($url, 'GET');
         if ($languageBase !== null) {
-            $request = $request->withAttribute('language', new SiteLanguage(1, 'en_GB.UTF-8', new Uri($languageBase), []));
+            $request = $request->withAttribute('language', new SiteLanguage($languageId, 'en_GB.UTF-8', new Uri($languageBase), []));
         }
 
         return $request;
@@ -108,6 +108,15 @@ final class LeakGuardTest extends TestCase
         self::assertSame(['check' => 'language_path', 'expected' => '/zweite-seite', 'actual' => '/en/'], $finding);
         // A path that only starts with the same letters is no match either.
         self::assertSame('language_path', LeakGuard::check(self::server('example.org', '/english'), 'example.org', self::request('https://example.org/english', '/en/'))['check'] ?? null);
+    }
+
+    #[Test]
+    public function theDefaultLanguageMayResolveForAPathOutsideItsBase(): void
+    {
+        // A static route or the site root while the default language lives
+        // under /de/: TYPO3 resolves the default language for both.
+        self::assertNull(LeakGuard::check(self::server('example.org', '/robots.txt'), 'example.org', self::request('https://example.org/robots.txt', '/de/', 0)));
+        self::assertNull(LeakGuard::check(self::server('example.org', '/'), 'example.org', self::request('https://example.org/', '/de/', 0)));
     }
 
     #[Test]
