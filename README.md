@@ -59,7 +59,9 @@ Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration
 
 With `FE.cacheHash.enforceValidation` and `FE.pageNotFoundOnCHashError`, TYPO3 answers a page URL that carries a parameter the cHash would have to cover, but no cHash, with 404. That keeps random parameters from bypassing every cache, but a visitor who followed a link with a click id a mailer or a social network appended lands on an error page.
 
-The middleware runs right before `typo3/cms-frontend/page-argument-validator` and acts only in that case: GET or HEAD, no (or an empty) cHash, at least one parameter the cHash would have to cover. It answers `301` to the same URL without those parameters, with `Cache-Control: public, max-age=3600`. Parameters excluded from the cHash (`utm_*`, `gclid`, …) stay in the target. A redirect costs no render and creates no page cache entry, so the protection stays and the visitor gets the page.
+The middleware runs right before `typo3/cms-frontend/page-argument-validator` and acts only in that case: GET or HEAD, no (or an empty) cHash, at least one parameter the cHash would have to cover. It answers `301` to the same URL without those parameters, with `Cache-Control: private, max-age=3600`. Parameters excluded from the cHash (`utm_*`, `gclid`, …) stay in the target. A redirect costs no render and creates no page cache entry, so the protection stays and the visitor gets the page.
+
+Behind caddy-proxy, tracking parameters are removed before the edge cache and never reach TYPO3. The proxy passes the client's query string in `X-Koh-Original-Query` (always set by the proxy, so a client value never arrives); the parameters it removed are put back into the target, so analytics still sees them. That is why the redirect is `private`: the edge cache key carries no tracking parameters, and a stored redirect would hand one visitor's values to the next. Edge protection is unchanged, because a new value of an unknown parameter is a miss either way.
 
 Left to TYPO3: a cHash that is present but wrong (still 404), other methods, and configurations in which a missing cHash is not a 404. `KOH_CHASH_REDIRECT=0` switches it off.
 

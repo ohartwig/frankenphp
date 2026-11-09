@@ -35,11 +35,25 @@ use TYPO3\CMS\Frontend\Page\CacheHashCalculator;
  * wrong (that stays a 404, it is a tampering signal), other methods, and any
  * configuration in which a missing cHash does not lead to a 404.
  *
+ * Behind caddy-proxy, tracking parameters (utm_*, gclid, srsltid, …) are removed
+ * before the edge cache, so they never reach TYPO3. The proxy passes the query
+ * string as the client sent it in X-Koh-Original-Query; the parameters it removed
+ * are put back into the target, so analytics still sees them after the redirect.
+ * The proxy always sets that header, a value the client sends never arrives.
+ *
+ * The redirect is `private`: the edge cache key has no tracking parameters, so a
+ * stored redirect would hand one visitor's utm values, or none, to the next. A
+ * browser may keep it. The edge protection is unchanged: a new value of an
+ * unknown parameter was a miss before, too.
+ *
  * KOH_CHASH_REDIRECT=0 switches it off.
  */
 final class CacheHashRedirectMiddleware implements MiddlewareInterface
 {
     public const ENV = 'KOH_CHASH_REDIRECT';
+
+    /** Set by caddy-proxy: the query string before strip-tracking-query. */
+    public const ORIGINAL_QUERY_HEADER = 'X-Koh-Original-Query';
 
     /** Bounded, so a parameter that later becomes legitimate is not redirected away by browsers for long. */
     private const MAX_AGE = 3600;
@@ -54,7 +68,7 @@ final class CacheHashRedirectMiddleware implements MiddlewareInterface
         }
 
         return new RedirectResponse($target, 301, [
-            'Cache-Control' => 'public, max-age=' . self::MAX_AGE,
+            'Cache-Control' => 'private, max-age=' . self::MAX_AGE,
         ]);
     }
 
@@ -107,7 +121,28 @@ final class CacheHashRedirectMiddleware implements MiddlewareInterface
             return null;
         }
 
+        $kept += $this->strippedAtTheEdge($request, $query, $drop);
+
         return (string)$request->getUri()->withQuery(HttpUtility::buildQueryString($kept))->withFragment('');
+    }
+
+    /**
+     * The parameters the proxy removed before the cache: in the client's query,
+     * not in the one TYPO3 received. Anything the redirect drops stays dropped.
+     *
+     * @param array<array-key, mixed> $query
+     * @param array<array-key, true> $drop
+     * @return array<array-key, mixed>
+     */
+    private function strippedAtTheEdge(ServerRequestInterface $request, array $query, array $drop): array
+    {
+        $original = $request->getHeaderLine(self::ORIGINAL_QUERY_HEADER);
+        if ($original === '') {
+            return [];
+        }
+        parse_str($original, $originalParams);
+
+        return array_diff_key($originalParams, $query, $drop);
     }
 
     public static function isEnabled(): bool

@@ -83,7 +83,7 @@ final class CacheHashRedirectMiddlewareTest extends TestCase
 
         self::assertSame(301, $response->getStatusCode());
         self::assertSame('https://www.example.org/blog/', $response->getHeaderLine('Location'));
-        self::assertSame('public, max-age=3600', $response->getHeaderLine('Cache-Control'));
+        self::assertSame('private, max-age=3600', $response->getHeaderLine('Cache-Control'));
     }
 
     #[Test]
@@ -93,6 +93,39 @@ final class CacheHashRedirectMiddlewareTest extends TestCase
 
         self::assertSame(301, $response->getStatusCode());
         self::assertSame('https://www.example.org/blog/?utm_source=news&gclid=x', $response->getHeaderLine('Location'));
+    }
+
+    #[Test]
+    public function parametersTheEdgeRemovedArePutBack(): void
+    {
+        // The proxy stripped utm_source and srsltid; TYPO3 received only foo.
+        $request = $this->request('https://www.example.org/blog/?foo=bar')
+            ->withHeader(CacheHashRedirectMiddleware::ORIGINAL_QUERY_HEADER, 'utm_source=news&foo=bar&srsltid=abc');
+
+        $response = $this->process($request);
+
+        self::assertSame(301, $response->getStatusCode());
+        self::assertSame('https://www.example.org/blog/?utm_source=news&srsltid=abc', $response->getHeaderLine('Location'));
+    }
+
+    #[Test]
+    public function whatTheRedirectDropsStaysDroppedEvenIfTheHeaderCarriesIt(): void
+    {
+        $request = $this->request('https://www.example.org/?foo=1&L=1')
+            ->withHeader(CacheHashRedirectMiddleware::ORIGINAL_QUERY_HEADER, 'foo=2&L=0&cHash=x&utm_medium=mail');
+
+        $response = $this->process($request);
+
+        self::assertSame('https://www.example.org/?L=1&utm_medium=mail', $response->getHeaderLine('Location'));
+    }
+
+    #[Test]
+    public function theHeaderAloneNeverCausesARedirect(): void
+    {
+        $request = $this->request('https://www.example.org/blog/?utm_medium=mail')
+            ->withHeader(CacheHashRedirectMiddleware::ORIGINAL_QUERY_HEADER, 'utm_medium=mail&foo=1');
+
+        self::assertSame(200, $this->process($request)->getStatusCode());
     }
 
     #[Test]
