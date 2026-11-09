@@ -9,6 +9,7 @@ use Koh\FrankenPHP\Runtime\FrontendWorker;
 use Koh\FrankenPHP\Runtime\PooledConnections;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
 use Koh\FrankenPHP\Runtime\RequestStateReset;
+use Koh\FrankenPHP\Runtime\RequestTiming;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -274,5 +275,47 @@ final class FrontendWorkerTest extends TestCase
         $this->runCapturing($this->worker('/typo3'), 10);
 
         self::assertCount(2, FrankenPhpWorkerApiSpy::$handlers);
+    }
+
+    #[Test]
+    public function everyFrontendRequestIsTimedAndCounted(): void
+    {
+        $lines = [];
+        RequestTiming::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = $line;
+        });
+        FrankenPhpWorkerApiSpy::reset(2);
+        try {
+            $this->runCapturing($this->worker('/blog'), 2);
+        } finally {
+            RequestTiming::writeTo(null);
+        }
+
+        self::assertCount(2, $lines);
+        $first = json_decode($lines[0], true);
+        $second = json_decode($lines[1], true);
+        self::assertIsArray($first);
+        self::assertIsArray($second);
+        // The fixture's bootstrap throws: a 500, timed, without a boot time.
+        self::assertSame(500, $first['status']);
+        self::assertNull($first['boot_ms']);
+        self::assertSame(1, $first['worker_request']);
+        self::assertSame(2, $second['worker_request']);
+    }
+
+    #[Test]
+    public function aRequestTurnedAwayIsNotTimed(): void
+    {
+        $lines = [];
+        RequestTiming::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = $line;
+        });
+        try {
+            $this->runCapturing($this->worker('/typo3/module/web/layout'));
+        } finally {
+            RequestTiming::writeTo(null);
+        }
+
+        self::assertSame([], $lines);
     }
 }

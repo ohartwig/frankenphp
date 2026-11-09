@@ -43,6 +43,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `DB_REUSE_MAX_REQUESTS` | Requests a connection serves at most (`0` = no limit) | `1000` |
 | `DB_REUSE_LIVENESS_CHECK` | `SELECT 1` on a kept connection before the request, so a connection the server dropped is replaced rather than failing the request | `1` |
 | `KOH_CHASH_REDIRECT` | Redirect page URLs that carry parameters without the required cHash to the same URL without them, instead of the 404 (see `CacheHashRedirectMiddleware`); `0` restores the 404 | `1` |
+| `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
 
 ### EarlyHintMiddleware
 
@@ -54,6 +55,16 @@ After `handler->handle()`, the PSR-15 middleware collects the CSS and JS sources
 Both mechanisms deliver preload hints the browser can deduplicate. Pages heavy on CSS/JS get measurably better LCP.
 
 Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration/RequestMiddlewares.php`).
+
+### Request timing
+
+The frontend worker writes one JSON line per request it serves, to the container log:
+
+```json
+{"koh_timing":"frontend","host":"example.org","path":"/blog","status":200,"page":"rendered","boot_ms":31.2,"app_ms":214.9,"total_ms":246.4,"worker_request":17,"mem_peak_mb":42.0}
+```
+
+`boot_ms` is TYPO3's bootstrap, which the worker runs for every request; `app_ms` is the application after it. `page` is `rendered` when TYPO3 generated the page content in this request (`AfterCacheableContentIsGeneratedEvent`), `not-rendered` for a page from the page cache or a response that is no page, so read it with `status`. The edge only sees the total of a request it had not cached; these lines say whether that time went into booting or into rendering. Only the path is logged, never the query string. A request turned away (backend, Install) is not timed. `KOH_REQUEST_TIMING=0` switches it off.
 
 ### CacheHashRedirectMiddleware
 

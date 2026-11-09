@@ -12,7 +12,9 @@ namespace Koh\FrankenPHP\Runtime;
  * that state before and after every request (see RequestStateReset). Database
  * connections are the exception: DatabaseConnectionReuse decides at the same
  * two points whether they stay open for the next request.
- * Backend and Install requests are rejected with HTTP 503.
+ * Backend and Install requests are rejected with HTTP 503. Every frontend
+ * request it serves is timed (RequestTiming): bootstrap and application
+ * separately, and whether TYPO3 rendered the page.
  */
 final readonly class FrontendWorker
 {
@@ -39,7 +41,8 @@ final readonly class FrontendWorker
         $handlers = RequestStateReset::currentHandlers();
 
         while ($nbRequests < $maxRequests && $running) {
-            $running = \frankenphp_handle_request($this->handleRequest(...));
+            $workerRequest = $nbRequests + 1;
+            $running = \frankenphp_handle_request(fn() => $this->handleRequest($workerRequest));
             // After the request as well as before the next one: an idle worker
             // should not hold the last page's objects until traffic arrives
             // again, nor a connection that is not fit for the next request.
@@ -51,8 +54,9 @@ final readonly class FrontendWorker
         }
     }
 
-    private function handleRequest(): void
+    private function handleRequest(int $workerRequest = 1): void
     {
+        $start = hrtime(true);
         RequestStateReset::resetRequestState();
         $this->connections->beforeRequest();
 
@@ -68,6 +72,8 @@ final readonly class FrontendWorker
         // emitter streams output incrementally and FrankenPHP may not
         // receive the complete response before the worker recycles.
         ob_start();
+        RequestTiming::begin();
+        $booted = null;
 
         try {
             $classLoader = require $this->autoloadPath;
@@ -75,9 +81,9 @@ final readonly class FrontendWorker
                 0,
                 \TYPO3\CMS\Core\Core\SystemEnvironmentBuilder::REQUESTTYPE_FE
             );
-            \TYPO3\CMS\Core\Core\Bootstrap::init($classLoader)
-                ->get(\TYPO3\CMS\Core\Http\Application::class)
-                ->run();
+            $container = \TYPO3\CMS\Core\Core\Bootstrap::init($classLoader);
+            $booted = hrtime(true);
+            $container->get(\TYPO3\CMS\Core\Http\Application::class)->run();
         } catch (\Throwable $e) {
             ob_end_clean();
             http_response_code(500);
@@ -89,6 +95,7 @@ final readonly class FrontendWorker
                 $e->getFile(),
                 $e->getLine()
             ));
+            RequestTiming::record($start, $booted, hrtime(true), 500, $workerRequest);
             return;
         }
 
@@ -105,5 +112,7 @@ final readonly class FrontendWorker
         header_remove('Content-Length');
         header('Content-Length: ' . strlen($content), true);
         echo $content;
+        $status = http_response_code();
+        RequestTiming::record($start, $booted, hrtime(true), is_int($status) ? $status : 200, $workerRequest);
     }
 }
