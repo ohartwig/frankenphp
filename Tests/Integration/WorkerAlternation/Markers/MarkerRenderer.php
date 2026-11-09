@@ -8,6 +8,7 @@ use Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\Domain\Repository
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Core\Attribute\AsAllowedCallable;
 use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Http\NormalizedParams;
 use TYPO3\CMS\Core\Site\Entity\Site;
 use TYPO3\CMS\Core\Site\Entity\SiteLanguage;
@@ -122,8 +123,13 @@ final class MarkerRenderer
     {
         $context = GeneralUtility::makeInstance(Context::class);
         $fallbackChain = $context->getPropertyFromAspect('language', 'fallbackChain', []);
+        // An aspect no core code sets: present only if this Context object
+        // already served an earlier request.
+        $fresh = !$context->hasAspect('worker_alternation');
+        $context->setAspect('worker_alternation', new UserAspect());
 
         return [
+            'context.fresh' => $fresh ? '1' : '0',
             'context.language.id' => (string) $context->getPropertyFromAspect('language', 'id'),
             'context.language.content_id' => (string) $context->getPropertyFromAspect('language', 'contentId'),
             'context.language.overlay_type' => (string) $context->getPropertyFromAspect('language', 'overlayType'),

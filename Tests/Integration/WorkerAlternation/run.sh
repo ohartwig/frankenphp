@@ -53,6 +53,9 @@ if curl -fsS -o /dev/null http://127.0.0.1:8080/healthz 2>/dev/null; then
     echo "Port 8080 is already in use; stop the server running there first." >&2
     exit 1
 fi
+WA_PERSISTENT_BOOTSTRAP=${WA_PERSISTENT_BOOTSTRAP:-0}
+export WA_PERSISTENT_BOOTSTRAP
+echo "KOH_PERSISTENT_BOOTSTRAP=$WA_PERSISTENT_BOOTSTRAP"
 WA_PROJECT_DIR="$PROJECT" MAX_REQUESTS=100000 \
     frankenphp run --config "$HERE/Caddyfile" --adapter caddyfile >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -82,6 +85,10 @@ fi
 echo "--- alternating requests"
 rc=0
 php "$HERE/check.php" 127.0.0.1 8080 || rc=$?
+
+echo "--- request timing (koh_timing lines of this run)"
+if [ "$WA_PERSISTENT_BOOTSTRAP" = 1 ]; then mode=persistent; else mode=fresh; fi
+php "$HERE/timing.php" "$LOG" "$mode" || rc=1
 
 if [ "$rc" != 0 ]; then
     echo "--- FrankenPHP log (last 80 lines)"

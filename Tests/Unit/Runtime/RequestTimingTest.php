@@ -129,4 +129,19 @@ final class RequestTimingTest extends TestCase
 
         self::assertSame([], $this->lines);
     }
+
+    #[Test]
+    public function aRequestSaysWhetherItBootedOrReusedTheBootstrap(): void
+    {
+        RequestTiming::record(1_000_000_000, 1_000_100_000, 1_007_500_000, 200, 2, true);
+        RequestTiming::record(1_000_000_000, 1_031_200_000, 1_246_400_000, 200, 1);
+
+        $reused = json_decode($this->lines[0], true);
+        $fresh = json_decode($this->lines[1], true);
+        self::assertIsArray($reused);
+        self::assertIsArray($fresh);
+        self::assertSame('reused', $reused['bootstrap']);
+        self::assertSame(0.1, $reused['boot_ms']);
+        self::assertSame('fresh', $fresh['bootstrap']);
+    }
 }

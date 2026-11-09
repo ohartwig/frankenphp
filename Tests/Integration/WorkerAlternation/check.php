@@ -85,7 +85,8 @@ foreach ($sites as $identifier => $site) {
                     'ts.language.id' => (string) $languageId,
                     'ts.page.title' => $title,
                     'ts.link.self' => 'http://' . $authority . $path,
-                    // Context aspects
+                    // Context aspects, on a Context object of this request
+                    'context.fresh' => '1',
                     'context.language.id' => (string) $languageId,
                     'context.language.content_id' => (string) $languageId,
                     'context.language.overlay_type' => $language['overlayType'],

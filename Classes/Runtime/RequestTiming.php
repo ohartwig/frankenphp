@@ -16,12 +16,16 @@ namespace Koh\FrankenPHP\Runtime;
  *
  *   {"koh_timing":"frontend","host":"example.org","path":"/blog","status":200,
  *    "page":"rendered","boot_ms":31.2,"app_ms":214.9,"total_ms":246.4,
- *    "worker_request":17,"mem_peak_mb":42.0}
+ *    "worker_request":17,"mem_peak_mb":42.0,"bootstrap":"fresh"}
  *
  * `page` is `rendered` when TYPO3 generated the page content in this request
  * (AfterCacheableContentIsGeneratedEvent fired) and `not-rendered` otherwise:
  * a page from TYPO3's page cache, or a response that is no page (a redirect,
  * a 404, a sitemap). Read it together with `status`.
+ *
+ * `bootstrap` is `fresh` when the request booted TYPO3 and `reused` when it
+ * ran on the persistent bootstrap's kept container; `boot_ms` is then the
+ * cost of putting that container back into its boot state.
  *
  * Only the path is logged, never the query string. Written with error_log(),
  * like PurgeAudit, so it lands in the container log without any log
@@ -70,8 +74,9 @@ final class RequestTiming
      * @param int|float|null $booted         when TYPO3 had booted; null if it never did
      * @param int|float      $end            when the response was complete
      * @param int            $workerRequest  the how-manieth request of this worker process
+     * @param bool           $reused         whether the request ran on a kept bootstrap (PersistentBootstrap)
      */
-    public static function record(int|float $start, int|float|null $booted, int|float $end, int $status, int $workerRequest): void
+    public static function record(int|float $start, int|float|null $booted, int|float $end, int $status, int $workerRequest, bool $reused = false): void
     {
         if (!self::isEnabled()) {
             return;
@@ -89,6 +94,7 @@ final class RequestTiming
                 'total_ms' => self::milliseconds($end - $start),
                 'worker_request' => $workerRequest,
                 'mem_peak_mb' => round(memory_get_peak_usage(true) / 1048576, 1),
+                'bootstrap' => $reused ? 'reused' : 'fresh',
             ],
             JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PRESERVE_ZERO_FRACTION,
         );
