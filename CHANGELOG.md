@@ -3,6 +3,21 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.8.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.7.1...v5.8.0) (2026-11-09)
+
+### :sparkles: Features
+
+* **cache:** send edge purges after a save as a message, optionally async ([4fa7681](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/4fa7681074802017a88e60da512929c7f4951748))
+
+### :white_check_mark: Tests
+
+* one fixture class per file, as PSR-4 requires ([782893b](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/782893b38f77497d01ca57139b31207d33ac03c1))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([5e71fce](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/5e71fcefdfd6ee17b563b99b19aafe1e13805405))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.173-8.5 ([2eb4847](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/2eb4847390946af9f37409393076ebd762f1acea))
+
 ## [5.7.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.7.0...v5.7.1) (2026-11-09)
 
 ### :bug: Fixes
