@@ -1,0 +1,17 @@
+# Only what has to come from the container. The SingletonInterface probes and
+# MarkerRenderer stay out on purpose: they are created through makeInstance(),
+# whose singleton registry is what RequestStateReset clears.
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: false
+
+  Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\Domain\Repository\GreetingRepository:
+    public: true
+
+  Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\LanguageTermsService:
+    public: true
+
+  Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\LateStateMiddleware:
+    public: true

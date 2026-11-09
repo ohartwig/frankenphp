@@ -12,7 +12,14 @@ declare(strict_types=1);
  * produced the response should yield; one value from a previous request is a
  * leak and fails the run. The worker markers prove that one worker served the
  * whole run: the token never changes and the count grows by exactly one per
- * request. Exit code 0 on success, 1 on any mismatch.
+ * request.
+ *
+ * Beyond the markers, each response must carry exactly its own <title> and
+ * its own PageRenderer and AssetCollector assets (no other page's, no
+ * duplicates), and a request time from the seconds it was under way.
+ *
+ * Exit code 0 on success, 1 on any mismatch. Warnings (the static-append
+ * probe) are printed but do not change the exit code.
  */
 
 $ip = $argv[1] ?? '127.0.0.1';
@@ -23,8 +30,8 @@ $sites = [
     'site-b' => ['host' => 'site-b.test', 'label' => 'Site B', 'pages' => [10 => 11, 11 => 10]],
 ];
 $languages = [
-    0 => ['code' => 'de', 'prefix' => '/', 'titles' => ['Startseite', 'Zweite Seite'], 'slugs' => ['', 'zweite-seite']],
-    1 => ['code' => 'en', 'prefix' => '/en/', 'titles' => ['Home', 'Second Page'], 'slugs' => ['', 'second-page']],
+    0 => ['code' => 'de', 'prefix' => '/', 'titles' => ['Startseite', 'Zweite Seite'], 'slugs' => ['', 'zweite-seite'], 'greeting' => 'Hallo', 'overlayType' => 'includeFloating', 'fallbackChain' => 'pageNotFound'],
+    1 => ['code' => 'en', 'prefix' => '/en/', 'titles' => ['Home', 'Second Page'], 'slugs' => ['', 'second-page'], 'greeting' => 'Hello', 'overlayType' => 'mixed', 'fallbackChain' => '0,pageNotFound'],
 ];
 
 /**
@@ -48,10 +55,13 @@ foreach ($sites as $identifier => $site) {
             $otherPageId = $site['pages'][$pageId];
             $title = $site['label'] . ' ' . $language['titles'][$index];
             $key = sprintf('%s/%s/%d', $identifier, $language['code'], $pageId);
+            $terms = 'Site A ' . $language['greeting'] . ',Site B ' . $language['greeting'];
             $targets[$key] = [
                 'url' => 'http://' . $authority . $path,
                 'host' => $site['host'],
                 'path' => $path,
+                'assetKey' => $pageId . '-' . $languageId,
+                'title' => $site['label'] . ': ' . $title,
                 'expected' => [
                     'indpenv.http_host' => $authority,
                     'indpenv.request_host' => 'http://' . $authority,
@@ -75,6 +85,33 @@ foreach ($sites as $identifier => $site) {
                     'ts.language.id' => (string) $languageId,
                     'ts.page.title' => $title,
                     'ts.link.self' => 'http://' . $authority . $path,
+                    // Context aspects
+                    'context.language.id' => (string) $languageId,
+                    'context.language.content_id' => (string) $languageId,
+                    'context.language.overlay_type' => $language['overlayType'],
+                    'context.language.fallback_chain' => $language['fallbackChain'],
+                    'context.visibility.hidden_pages' => '0',
+                    'context.visibility.hidden_content' => '0',
+                    'context.visibility.deleted_records' => '0',
+                    'context.frontend_user.logged_in' => '0',
+                    'context.frontend_user.id' => '0',
+                    'context.backend_user.logged_in' => '0',
+                    'context.backend_user.id' => '0',
+                    // Extbase repository read in the request's language
+                    'extbase.title' => $site['label'] . ' ' . $language['greeting'],
+                    'extbase.language_uid' => (string) $languageId,
+                    // Language-dependent data loaded in a constructor
+                    'singleton.language_id' => (string) $languageId,
+                    'singleton.language_terms' => $terms,
+                    'service.language_id' => (string) $languageId,
+                    'service.language_terms' => $terms,
+                    // The global request at the end of rendering
+                    'late.int.globals_host' => $authority,
+                    'late.int.globals_page_id' => (string) $pageId,
+                    'late.int.request_page_id' => (string) $pageId,
+                    'late.mw.globals_host' => $authority,
+                    'late.mw.globals_path' => $path,
+                    'late.mw.globals_page_id' => (string) $pageId,
                 ],
             ];
         }
@@ -136,6 +173,10 @@ curl_setopt_array($curl, [
 ]);
 
 $failures = [];
+// Checks that report without failing the run, see below.
+$warnings = [];
+$appendLength = null;
+$previousTimestamp = 0;
 $token = null;
 $firstCount = null;
 $lastCount = null;
@@ -146,8 +187,15 @@ $started = microtime(true);
 foreach ($sequence as $number => $key) {
     $target = $targets[$key];
     $label = sprintf('#%d %s (%s)', $number + 1, $target['url'], $key);
+    // Twice in the run, let the clock move on by more than a second, so a
+    // request time kept from an earlier request cannot pass for a fresh one.
+    if ($number === 1 || $number === 48) {
+        usleep(1_100_000);
+    }
     curl_setopt($curl, CURLOPT_URL, $target['url']);
+    $before = time();
     $body = curl_exec($curl);
+    $after = time();
     $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
 
     if (!is_string($body) || $status !== 200) {
@@ -172,6 +220,52 @@ foreach ($sequence as $number => $key) {
                 var_export($expected, true),
             );
         }
+    }
+
+    // The request time: within the seconds the request was under way, and
+    // never behind the previous request's.
+    foreach (['context.date.timestamp', 'globals.exec_time', 'globals.sim_exec_time'] as $name) {
+        $value = (int) ($markers[$name] ?? 0);
+        if ($value < $before || $value > $after || $value < $previousTimestamp) {
+            $failures[] = sprintf(
+                '%s: marker %s is %s, expected a time between %d and %d (not before the previous request\'s %d)',
+                $label,
+                $name,
+                var_export($markers[$name] ?? null, true),
+                $before,
+                $after,
+                $previousTimestamp,
+            );
+        }
+    }
+    $previousTimestamp = (int) ($markers['context.date.timestamp'] ?? 0);
+
+    // PageRenderer and AssetCollector: exactly one of each asset, and it is
+    // this page's in this language.
+    preg_match_all('#<title>(.*?)</title>#s', $body, $titles);
+    if ($titles[1] !== [$target['title']]) {
+        $failures[] = sprintf('%s: <title> is %s, expected exactly %s', $label, json_encode($titles[1], JSON_UNESCAPED_UNICODE), json_encode([$target['title']], JSON_UNESCAPED_UNICODE));
+    }
+    preg_match_all('#wa-(pr-meta|pr-js|pr-css|ac-js|ac-css)-(\d+-\d+)#', $body, $assets, PREG_SET_ORDER);
+    $found = array_fill_keys(['pr-meta', 'pr-js', 'pr-css', 'ac-js', 'ac-css'], []);
+    foreach ($assets as [, $kind, $assetKey]) {
+        $found[$kind][] = $assetKey;
+    }
+    foreach ($found as $kind => $assetKeys) {
+        if ($assetKeys !== [$target['assetKey']]) {
+            $failures[] = sprintf('%s: asset wa-%s found for %s, expected exactly [%s]', $label, $kind, $assetKeys === [] ? 'nothing' : '[' . implode(', ', $assetKeys) . ']', $target['assetKey']);
+        }
+    }
+
+    // A static property a constructor appends to (AppendingParser). The
+    // worker does not reset static properties, so on a per-request bootstrap
+    // this grows with every request; it is reported, not failed.
+    // TODO: make this a failure once the persistent-bootstrap change keeps
+    // such singletons, or resets their static state, between requests.
+    $length = $markers['static.append_length'] ?? null;
+    $appendLength ??= $length;
+    if ($length !== $appendLength) {
+        $warnings[] = sprintf('%s: static.append_length is %s, the first request had %s', $label, var_export($length, true), var_export($appendLength, true));
     }
 
     // One worker for the whole run: same token, count up by one per request.
@@ -202,8 +296,28 @@ printf(
     implode(',', array_keys($pids)),
 );
 
+if ($warnings !== []) {
+    printf("WARNING (informational, does not fail the run): a static property a constructor appends to grew in %d of %d responses\n", count($warnings), $total);
+    foreach (array_slice($warnings, 0, 5) as $warning) {
+        echo '  ' . $warning . "\n";
+    }
+    if (count($warnings) > 5) {
+        printf("  ... and %d more\n", count($warnings) - 5);
+    }
+}
+
 if ($failures !== []) {
     printf("FAILED: %d mismatches\n", count($failures));
+    // Which checks failed, over the whole run; the details below are cut short.
+    $byCheck = [];
+    foreach ($failures as $failure) {
+        $check = preg_replace(['#^\#\d+ \S+ \([^)]+\): #', '#^(marker \S+|asset \S+|<title>|HTTP \d+|served by another worker|worker request count).*$#s'], ['', '$1'], $failure);
+        $byCheck[$check] = ($byCheck[$check] ?? 0) + 1;
+    }
+    arsort($byCheck);
+    foreach ($byCheck as $check => $times) {
+        printf("  %4d x %s\n", $times, $check);
+    }
     foreach (array_slice($failures, 0, 60) as $failure) {
         echo '  ' . $failure . "\n";
     }

@@ -63,4 +63,25 @@ foreach ($pages as $sorting => [$uid, $pid, $language, $parent, $siteRoot, $titl
     ]);
 }
 
-echo 'Seeded ' . count($pages) . " pages.\n";
+// uid, pid, sys_language_uid, l10n_parent, title: one greeting per site,
+// translated into English.
+$greetings = [
+    [1, 1, 0, 0, 'Site A Hallo'],
+    [2, 10, 0, 0, 'Site B Hallo'],
+    [3, 1, 1, 1, 'Site A Hello'],
+    [4, 10, 1, 2, 'Site B Hello'],
+];
+$connection = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('tx_workeralternationmarkers_greeting');
+$connection->truncate('tx_workeralternationmarkers_greeting');
+foreach ($greetings as [$uid, $pid, $language, $parent, $title]) {
+    $connection->insert('tx_workeralternationmarkers_greeting', [
+        'uid' => $uid,
+        'pid' => $pid,
+        'sys_language_uid' => $language,
+        'l10n_parent' => $parent,
+        'l10n_source' => $parent,
+        'title' => $title,
+    ]);
+}
+
+echo 'Seeded ' . count($pages) . ' pages and ' . count($greetings) . " greetings.\n";

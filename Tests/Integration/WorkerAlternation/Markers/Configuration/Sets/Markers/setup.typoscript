@@ -7,6 +7,11 @@ config {
 
 page = PAGE
 page {
+    # Meta tag, inline JavaScript and a style sheet for this page and language,
+    # through PageRenderer and AssetCollector, see PageAssets.
+    5 = USER
+    5.userFunc = Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\PageAssets->render
+
     # Markers computed in PHP, see MarkerRenderer.
     10 = USER_INT
     10 {
@@ -17,6 +22,11 @@ page {
             2 = 1
             10 = 11
             11 = 10
+        }
+        # The greeting each site reads through Extbase (by root page id).
+        greetingUid {
+            1 = 1
+            10 = 2
         }
     }
 
@@ -45,4 +55,12 @@ page {
         }
         50.wrap = <li data-marker="ts.link.self">|</li>
     }
+
+    # The last content object: the global request must still be this one.
+    90 = USER_INT
+    90.userFunc = Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\MarkerRenderer->renderLate
+
+    # LateStateMiddleware replaces this once the page has been rendered.
+    100 = TEXT
+    100.value = <!--worker-alternation-late-->
 }
