@@ -3,6 +3,16 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.10.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.10.0...v5.10.1) (2026-11-09)
+
+### :bug: Fixes
+
+* **worker:** keep the second boot, not one made on cold caches ([d7077f5](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/d7077f54aa458f40ed98a18fa0ec6c7d5a9a98b3))
+
+### :white_check_mark: Tests
+
+* fill in form framework forms in the worker alternation test ([670c5c6](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/670c5c64ccdc91ebc2f57b73411a322dec30b8bb))
+
 ## [5.10.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.9.0...v5.10.0) (2026-11-09)
 
 ### :sparkles: Features
