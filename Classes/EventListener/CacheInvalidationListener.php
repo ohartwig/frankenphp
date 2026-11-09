@@ -6,9 +6,11 @@ namespace Koh\FrankenPHP\EventListener;
 
 use Doctrine\DBAL\ParameterType;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\Messenger\MessageBusInterface;
 use TYPO3\CMS\Core\Cache\Event\CacheFlushEvent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
+use Koh\FrankenPHP\Message\PurgeEdgeCache;
 use Koh\FrankenPHP\Service\CaddyCacheService;
 use Koh\FrankenPHP\Service\PurgeAudit;
 
@@ -53,6 +55,7 @@ class CacheInvalidationListener
         private readonly CaddyCacheService $caddyCacheService,
         private readonly LoggerInterface $logger,
         private readonly ConnectionPool $connectionPool,
+        private readonly MessageBusInterface $messageBus,
     ) {}
 
     /**
@@ -185,6 +188,11 @@ class CacheInvalidationListener
      * plain statics because a worker process outlives the request, and entries
      * die with their DataHandler.
      *
+     * The purges themselves go out as one PurgeEdgeCache per call. TYPO3
+     * handles it in the request unless EdgePurgeRouting sends it to the
+     * koh/typo3-async consumer; the URLs are resolved here either way, while
+     * the DataHandler's view of the pages is current.
+     *
      * @param list<int> $pageIds
      */
     private function purgePages(array $pageIds, DataHandler $dataHandler): void
@@ -196,6 +204,7 @@ class CacheInvalidationListener
         /** @var array<string, true> $hostsDone */
         $hostsDone = self::$queryVariantHostsPerDataHandler[$dataHandler] ?? [];
 
+        $pageUrls = [];
         $newHosts = [];
         foreach ($pageIds as $pageId) {
             if ($pageId <= 0 || isset($done[$pageId])) {
@@ -206,7 +215,7 @@ class CacheInvalidationListener
             if ($urls === []) {
                 continue;
             }
-            $this->caddyCacheService->invalidateUrls($urls, false);
+            $pageUrls[] = $urls;
             foreach ($urls as $url) {
                 $host = CaddyCacheService::hostOf($url);
                 if (!isset($hostsDone[$host])) {
@@ -215,8 +224,8 @@ class CacheInvalidationListener
                 }
             }
         }
-        if ($newHosts !== []) {
-            $this->caddyCacheService->invalidateQueryVariants($newHosts);
+        if ($pageUrls !== []) {
+            $this->messageBus->dispatch(new PurgeEdgeCache($pageUrls, $newHosts, PurgeAudit::originContext()));
         }
 
         self::$purgedPerDataHandler[$dataHandler] = $done;

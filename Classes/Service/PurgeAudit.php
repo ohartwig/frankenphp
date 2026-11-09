@@ -25,6 +25,14 @@ final class PurgeAudit
     /** @var (callable(string): mixed)|null */
     private static $writer;
 
+    /**
+     * The context of the code path a purge is sent on behalf of. See
+     * onBehalfOf().
+     *
+     * @var array<string, mixed>|null
+     */
+    private static ?array $origin = null;
+
     public static function isEnabled(): bool
     {
         $value = getenv(self::ENV);
@@ -40,12 +48,79 @@ final class PurgeAudit
         if (!self::isEnabled()) {
             return;
         }
+        $context = self::$origin === null ? self::context() : self::$origin + self::handledBy(self::$origin);
         $line = json_encode(
-            ['koh_purge_audit' => $action] + $details + self::context(),
+            ['koh_purge_audit' => $action] + $details + $context,
             JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE,
         );
         $writer = self::$writer ?? static fn(string $message): bool => error_log($message);
         $writer((string) $line);
+    }
+
+    /**
+     * The context to hand to the code that sends the purge later, or
+     * elsewhere: null while the audit is off, so nothing walks the stack for
+     * a line nobody writes.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function originContext(): ?array
+    {
+        return self::isEnabled() ? self::context() : null;
+    }
+
+    /**
+     * Runs $purge with every line it records carrying $origin -- the request,
+     * backend user and code path that asked for the purge -- instead of the
+     * context it runs in. Where that is another process (the koh_async
+     * consumer), the line adds `handled_by` with the process that sent it.
+     * Where it is the same request, the line is the one an inline purge
+     * wrote. A null origin changes nothing.
+     *
+     * @param array<string, mixed>|null $origin
+     * @param callable(): void          $purge
+     */
+    public static function onBehalfOf(?array $origin, callable $purge): void
+    {
+        $previous = self::$origin;
+        self::$origin = $origin;
+        try {
+            $purge();
+        } finally {
+            self::$origin = $previous;
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $origin
+     *
+     * @return array<string, mixed>
+     */
+    private static function handledBy(array $origin): array
+    {
+        $here = self::process();
+        $there = array_intersect_key($origin, ['sapi' => true, 'command' => true]);
+        ksort($there);
+        $compare = $here;
+        ksort($compare);
+
+        return $compare === $there ? [] : ['handled_by' => $here];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function process(): array
+    {
+        $process = ['sapi' => PHP_SAPI];
+        if (PHP_SAPI === 'cli') {
+            $argv = $_SERVER['argv'] ?? [];
+            if (is_array($argv)) {
+                $process['command'] = implode(' ', array_slice($argv, 1, 3));
+            }
+        }
+
+        return $process;
     }
 
     /**
@@ -63,14 +138,7 @@ final class PurgeAudit
      */
     public static function context(): array
     {
-        $context = ['sapi' => PHP_SAPI];
-
-        if (PHP_SAPI === 'cli') {
-            $argv = $_SERVER['argv'] ?? [];
-            if (is_array($argv)) {
-                $context['command'] = implode(' ', array_slice($argv, 1, 3));
-            }
-        }
+        $context = self::process();
 
         $request = $GLOBALS['TYPO3_REQUEST'] ?? null;
         if ($request instanceof \Psr\Http\Message\ServerRequestInterface) {

@@ -34,3 +34,16 @@ $GLOBALS['TYPO3_CONF_VARS']['LOG']['Koh']['FrankenPHP']['Service']['CaddyCacheSe
         \TYPO3\CMS\Core\Log\Writer\PhpErrorLogWriter::class => [],
     ],
 ];
+
+// The edge cache purge after a save is a message (PurgeEdgeCache). It stays in
+// the request, as before, unless koh/typo3-async provides koh_async_cache, its
+// async mode is on and KOH_ASYNC_EDGE_PURGE=1: then the consumer sends it.
+// See EdgePurgeRouting for why all three.
+\Koh\FrankenPHP\Messenger\EdgePurgeRouting::configure(
+    $GLOBALS['TYPO3_CONF_VARS'],
+    \Koh\FrankenPHP\Messenger\EdgePurgeRouting::availableTransport(
+        \TYPO3\CMS\Core\Utility\ExtensionManagementUtility::isLoaded('koh_async')
+    ),
+    \Koh\FrankenPHP\Messenger\EdgePurgeRouting::asyncModeEnabled(),
+    \Koh\FrankenPHP\Messenger\EdgePurgeRouting::switchedOn(),
+);
