@@ -3,6 +3,19 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.7.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.7.0...v5.7.1) (2026-11-09)
+
+### :bug: Fixes
+
+* **chash-redirect:** keep tracking parameters the edge removed ([8b73546](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/8b73546f41b13abd571e23d7692872ab81be2455))
+
+### :repeat: Chores
+
+* **repo-templates:** sync ([599085e](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/599085eeb2d63f71b3c3a9474cbc19be53e31e0f))
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.172-8.5 ([c3e5913](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/c3e591353e7abba86091f36560982f674dbb7cee))
+* **repo-templates:** sync ([d0960e7](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/d0960e7cb6a8c89bec85fe1635d283d1de3d2a2e))
+* **repo-templates:** sync ([04f3146](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/04f3146cb6f6d0b78a909d91f024c7ecb12f0f08))
+
 ## [5.7.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.6.2...v5.7.0) (2026-11-08)
 
 ### :sparkles: Features
