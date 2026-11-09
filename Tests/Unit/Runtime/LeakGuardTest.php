@@ -87,9 +87,9 @@ final class LeakGuardTest extends TestCase
     #[Test]
     public function anotherHostInTheGlobalRequestIsAFinding(): void
     {
-        $finding = LeakGuard::check(self::server('site-b.test', '/'), 'site-b.test', self::request('http://site-a.test/'));
+        $finding = LeakGuard::check(self::server('site-b.test:8080', '/'), 'site-b.test:8080', self::request('http://site-a.test/'));
 
-        self::assertSame('global_request_host', $finding['check'] ?? null);
+        self::assertSame(['check' => 'global_request_host', 'expected' => 'site-b.test:8080', 'actual' => 'site-a.test'], $finding);
     }
 
     #[Test]
@@ -105,7 +105,9 @@ final class LeakGuardTest extends TestCase
     {
         $finding = LeakGuard::check(self::server('example.org', '/zweite-seite'), 'example.org', self::request('https://example.org/zweite-seite', '/en/'));
 
-        self::assertSame('language_path', $finding['check'] ?? null);
+        self::assertSame(['check' => 'language_path', 'expected' => '/zweite-seite', 'actual' => '/en/'], $finding);
+        // A path that only starts with the same letters is no match either.
+        self::assertSame('language_path', LeakGuard::check(self::server('example.org', '/english'), 'example.org', self::request('https://example.org/english', '/en/'))['check'] ?? null);
     }
 
     #[Test]

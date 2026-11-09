@@ -93,6 +93,7 @@ final class FrontendWorkerTest extends TestCase
         } finally {
             $output = (string)ob_get_clean();
             ini_set('error_log', $previousLog === false ? '' : $previousLog);
+            $this->log = (string) file_get_contents($logFile);
             unlink($logFile);
         }
 
@@ -305,6 +306,7 @@ final class FrontendWorkerTest extends TestCase
         self::assertNull($first['boot_ms']);
         self::assertSame(1, $first['worker_request']);
         self::assertSame(2, $second['worker_request']);
+        self::assertSame('fresh', $first['bootstrap']);
     }
 
     #[Test]
@@ -322,6 +324,9 @@ final class FrontendWorkerTest extends TestCase
 
         self::assertSame([], $lines);
     }
+
+    /** What the worker wrote with error_log() during the last runCapturing(). */
+    private string $log = '';
 
     /** How often the boot function of persistentWorker() ran. */
     private int $boots = 0;
@@ -391,6 +396,10 @@ final class FrontendWorkerTest extends TestCase
         self::assertSame([$clean, $clean, $clean], FakeApplication::$seen);
         $modes = array_map(static fn(string $line): mixed => (json_decode($line, true) ?: [])['bootstrap'] ?? null, $lines);
         self::assertSame(['fresh', 'reused', 'reused'], $modes);
+        // The last request's service is gone once the loop is back, too.
+        self::assertInstanceOf(Container::class, FakeApplication::$container);
+        self::assertFalse(FakeApplication::$container->has('fake.request.service'));
+        self::assertTrue(FakeApplication::$container->has('boot.state'));
     }
 
     /** A boot TYPO3 marks as failsafe or uncached is not kept. */
@@ -418,14 +427,27 @@ final class FrontendWorkerTest extends TestCase
         FrankenPhpWorkerApiSpy::reset(3);
         $worker = $this->persistentWorker('/blog');
         FakeApplication::$globalRequestHost = 'site-a.test';
+        $lines = [];
+        RequestTiming::writeTo(static function (string $line) use (&$lines): void {
+            $lines[] = $line;
+        });
         try {
             $output = $this->runCapturing($worker, 3);
         } finally {
+            RequestTiming::writeTo(null);
             unset($GLOBALS['FAKE_APPLICATION_LEFTOVER'], $GLOBALS['TYPO3_CONF_VARS']['FAKE']);
         }
 
         self::assertSame('Service Unavailable', $output);
         self::assertSame(503, http_response_code());
         self::assertCount(1, FrankenPhpWorkerApiSpy::$handlers);
+        self::assertStringContainsString(
+            '{"koh_worker_leak":"frontend","check":"global_request_host","expected":"site-b.test","actual":"site-a.test","worker_request":1}',
+            $this->log,
+        );
+        self::assertCount(1, $lines);
+        $line = json_decode($lines[0], true);
+        self::assertIsArray($line);
+        self::assertSame(503, $line['status']);
     }
 }

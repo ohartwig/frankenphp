@@ -17,18 +17,23 @@ final class FakeApplication
     /** @var list<array{container: bool, leftover: bool, requestService: bool, confVar: mixed}> */
     public static array $seen = [];
 
+    /** The container the last run() found. */
+    public static ?object $container = null;
+
     /** Host of the global request the next run() sets; null sets none. */
     public static ?string $globalRequestHost = null;
 
     public static function reset(): void
     {
         self::$seen = [];
+        self::$container = null;
         self::$globalRequestHost = null;
     }
 
     public function run(): void
     {
         $container = GeneralUtility::getContainer();
+        self::$container = $container;
         self::$seen[] = [
             'container' => $container->has('boot.state'),
             'leftover' => isset($GLOBALS['FAKE_APPLICATION_LEFTOVER']),
