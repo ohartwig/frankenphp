@@ -82,6 +82,9 @@ final class LeakGuard
      * request. That also covers what the host check cannot see: a request URI
      * or script name memoised for another page on the same host.
      *
+     * A value that cannot be computed again (getIndpEnv() throws) is skipped:
+     * the guard must never turn a healthy request into an error.
+     *
      * @return array{check: string, expected: string, actual: string}|null the first stale value, null if none
      */
     public static function staleIndpEnv(): ?array
@@ -89,7 +92,12 @@ final class LeakGuard
         $memoised = \Closure::bind(static fn(): array => static::$indpEnvCache, null, GeneralUtility::class)();
         GeneralUtility::flushInternalRuntimeCaches();
         foreach ($memoised as $name => $value) {
-            $fresh = self::indpEnv($name);
+            try {
+                $fresh = self::indpEnv($name);
+            } catch (\Throwable) {
+                // Not computable here: no evidence either way.
+                continue;
+            }
             if ($fresh !== $value) {
                 GeneralUtility::flushInternalRuntimeCaches();
 
@@ -140,7 +148,7 @@ final class LeakGuard
 
     private static function export(mixed $value): string
     {
-        return is_scalar($value) || $value === null ? (string) $value : (string) json_encode($value);
+        return is_string($value) ? $value : (string) json_encode($value);
     }
 
     private static function path(string $path): string

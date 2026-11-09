@@ -75,6 +75,38 @@ final class PersistentBootstrap
     /** @var array<string, mixed> */
     private array $bootGlobals = [];
 
+    /** @var \Closure(ClassLoader): ContainerInterface */
+    private \Closure $boot;
+
+    /** @var \Closure(): void */
+    private \Closure $refreshEnvironment;
+
+    /**
+     * @param (\Closure(ClassLoader): ContainerInterface)|null $boot               for tests: instead of SystemEnvironmentBuilder::run() and Bootstrap::init()
+     * @param (\Closure(): void)|null                          $refreshEnvironment for tests: instead of what is set up again per request (time globals, error handling, time zone)
+     */
+    public function __construct(?\Closure $boot = null, ?\Closure $refreshEnvironment = null)
+    {
+        $this->boot = $boot ?? static function (ClassLoader $classLoader): ContainerInterface {
+            SystemEnvironmentBuilder::run(0, SystemEnvironmentBuilder::REQUESTTYPE_FE);
+
+            return Bootstrap::init($classLoader);
+        };
+        $this->refreshEnvironment = $refreshEnvironment ?? static function (): void {
+            // EXEC_TIME and friends, T3_SERVICES, Environment: as for a fresh boot.
+            SystemEnvironmentBuilder::run(0, SystemEnvironmentBuilder::REQUESTTYPE_FE);
+            Bootstrap::startOutputBuffering();
+            \Closure::bind(
+                static function (): void {
+                    static::initializeErrorHandling();
+                    static::setDefaultTimezone();
+                },
+                null,
+                Bootstrap::class,
+            )();
+        };
+    }
+
     /**
      * @param array<array-key, mixed> $environment as for DatabaseConnectionReuse::fromEnvironment()
      */
@@ -103,8 +135,7 @@ final class PersistentBootstrap
             return [$kept, true];
         }
 
-        SystemEnvironmentBuilder::run(0, SystemEnvironmentBuilder::REQUESTTYPE_FE);
-        $container = Bootstrap::init($classLoader);
+        $container = ($this->boot)($classLoader);
         if ($container instanceof Container && $this->bootCompleted($container)) {
             $this->record($container);
         }
@@ -179,17 +210,7 @@ final class PersistentBootstrap
     private function prepareRequest(Container $container): void
     {
         $this->restoreGlobals();
-        // EXEC_TIME and friends, T3_SERVICES, Environment: as for a fresh boot.
-        SystemEnvironmentBuilder::run(0, SystemEnvironmentBuilder::REQUESTTYPE_FE);
-        Bootstrap::startOutputBuffering();
-        \Closure::bind(
-            static function (): void {
-                static::initializeErrorHandling();
-                static::setDefaultTimezone();
-            },
-            null,
-            Bootstrap::class,
-        )();
+        ($this->refreshEnvironment)();
         $this->resetContainer();
         // RequestStateReset::resetRequestState() emptied both.
         GeneralUtility::setContainer($container);

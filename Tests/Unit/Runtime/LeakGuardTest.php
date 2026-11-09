@@ -141,4 +141,30 @@ final class LeakGuardTest extends TestCase
 
         self::assertSame('{"koh_worker_leak":"frontend","check":"indpenv_host","expected":"b","actual":"a","worker_request":7}', $line);
     }
+
+    #[Test]
+    public function aGlobalRequestWithoutLanguageIsNoFinding(): void
+    {
+        self::assertNull(LeakGuard::check(self::server('example.org', '/'), 'example.org', self::request('https://example.org/')));
+    }
+
+    #[Test]
+    public function aValueThatCannotBeComputedAgainIsNoFinding(): void
+    {
+        // _ARRAY needs TYPO3's Environment, which a unit test does not set up.
+        GeneralUtility::setIndpEnv('_ARRAY', ['HTTP_HOST' => 'site-a.test']);
+
+        self::assertNull(LeakGuard::staleIndpEnv());
+    }
+
+    #[Test]
+    public function aStaleBooleanIsReportedAsJson(): void
+    {
+        $_SERVER['HTTPS'] = 'on';
+        GeneralUtility::setIndpEnv('TYPO3_SSL', false);
+
+        $finding = LeakGuard::staleIndpEnv();
+
+        self::assertSame(['check' => 'indpenv:TYPO3_SSL', 'expected' => 'true', 'actual' => 'false'], $finding);
+    }
 }
