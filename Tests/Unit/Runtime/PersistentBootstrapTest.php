@@ -168,7 +168,11 @@ final class PersistentBootstrapTest extends TestCase
         $lines = (string) file_get_contents((string) $log);
         unlink((string) $log);
 
-        self::assertStringContainsString('"koh_worker_kept":1', $lines);
+        // The inventory also lists objects other tests leave in the singleton
+        // registry or $GLOBALS (the suite runs in random order), so assert that
+        // the registry is in it rather than an exact count.
+        self::assertMatchesRegularExpression('/"koh_worker_kept":[1-9]\d*/', $lines);
+        self::assertStringContainsString('"service:TYPO3\\\\CMS\\\\Core\\\\MetaTag\\\\MetaTagManagerRegistry"', $lines);
         self::assertStringContainsString('"koh_worker_drift":1', $lines);
         self::assertStringContainsString('"properties":["instances","managers"]', $lines);
     }
