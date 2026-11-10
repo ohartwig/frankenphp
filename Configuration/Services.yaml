@@ -7,9 +7,19 @@ services:
   Koh\FrankenPHP\:
     resource: '../Classes/*'
     exclude:
+      - '../Classes/Cache/*'
       - '../Classes/Domain/Model/*'
+      - '../Classes/Fluid/MemoizingTemplatePaths.php'
+      - '../Classes/Fluid/TemplatePathMemo.php'
       - '../Classes/Message/*'
       - '../Classes/Runtime/*'
+
+  # KOH_WORKER_TEMPLATE_PATH_MEMO: Fluid file lookups remembered per worker.
+  # A pass-through while the switch is off; see TemplatePathMemo.
+  Koh\FrankenPHP\Fluid\TemplatePathMemoViewFactory:
+    decorates: TYPO3\CMS\Core\View\ViewFactoryInterface
+    arguments:
+      $inner: '@.inner'
 
   Koh\FrankenPHP\EventListener\SystemInformationToolbar:
     tags: { name: event.listener }

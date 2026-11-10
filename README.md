@@ -46,6 +46,8 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `DB_REUSE_LIVENESS_CHECK` | `SELECT 1` on a kept connection before the request, so a connection the server dropped is replaced rather than failing the request | `1` |
 | `KOH_CHASH_REDIRECT` | Redirect page URLs that carry parameters without the required cHash to the same URL without them, instead of the 404 (see `CacheHashRedirectMiddleware`); `0` restores the 404 | `1` |
 | `KOH_PERSISTENT_BOOTSTRAP` | Boot TYPO3 once per worker and start every later request from the recorded boot state instead of booting again (see *Persistent bootstrap*); `0` boots per request, as before | `0` |
+| `KOH_WORKER_CACHE_MEMO` | Skip the HMAC check (and, for object-free payloads, `unserialize()`) of read-mostly cache entries whose backend bytes this worker already verified (see *Worker memos*) | `0` |
+| `KOH_WORKER_TEMPLATE_PATH_MEMO` | Remember Fluid's file lookups inside code directories per worker (see *Worker memos*) | `0` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
 
 ### EarlyHintMiddleware
@@ -102,6 +104,16 @@ and the worker ends, so FrankenPHP starts a fresh one for the next request. The 
 **Static properties are not reset**, in either mode: TYPO3 offers no inventory of what an extension keeps in static properties, and resetting them to their defaults would also drop what is meant to last, such as `ConnectionPool`'s connections. An extension that appends to a static property in a constructor (the worker alternation test's check 5) grows by one piece per request in either mode. `MAX_REQUESTS` bounds that: the worker restarts after that many requests.
 
 Measured with the worker alternation test (SQLite, 96 requests, one worker, medians): booting per request, `boot_ms` 11.6 and `total_ms` 20.0, with the per-request memory peak growing from 16 to 26 MB over the run; with the persistent bootstrap (then still keeping the first boot), the first request 284 ms, every later one `boot_ms` 0.1 and `total_ms` 6.7, with the memory peak flat at 16 MB. With the form checks (122 requests, 26 of them form steps, keeping the second boot): booting per request, `total_ms` 34.2 and a memory peak growing from 20 to 30 MB; with the persistent bootstrap, the two booting requests about 350 ms, every later one `boot_ms` 0.1 and `total_ms` 23.3, with the memory peak between 22 and 26 MB.
+
+### Worker memos
+
+Two switches keep work across requests in a FrankenPHP worker. Both are off by default, take effect only in a worker (CLI, classic requests and backend pods are unchanged), and hold no request state.
+
+**`KOH_WORKER_CACHE_MEMO=1`** gives the read-mostly caches `hash`, `rootline`, `dpnglossary_termscache`, `structured_content_schema` and `consent_catalog` (`KOH_WORKER_CACHE_MEMO_CACHES`, comma-separated, overrides the list; only caches with the plain `VariableFrontend` that exist when this extension's `ext_localconf.php` runs are switched) the frontend `WorkerMemoVariableFrontend`. In TYPO3 14 a cache read is a backend read, an HMAC check (SHA3-384 over the payload) and `unserialize()`; for a 2.2 MiB menu tree that is 1.8 + 6.1 + 2.6 ms. The frontend still reads the backend on every `get()`, and that read is the validation: if the bytes are identical to bytes this worker already verified, the HMAC check is skipped, and for payloads without objects and PHP references the decoded value (scalars and arrays, which PHP copies on write) is returned as is. Payloads with objects are unserialised again for every read, so no object is shared between requests. Different bytes, a missing entry or a failed check go the core way. Flushes, tag flushes and writes on any pod are therefore seen on the next read on every pod, with no generation key and no TTL. Budget: `KOH_WORKER_CACHE_MEMO_MAX_BYTES` (default 32 MiB per worker, raw payload plus measured decoded size), least recently used out.
+
+**`KOH_WORKER_TEMPLATE_PATH_MEMO=1`** decorates `ViewFactoryInterface` so that Fluid views resolve their files through `MemoizingTemplatePaths`: sanitised root paths, resolved templates, layouts and partials (including failed lookups), template identifiers and the existence of an explicit template file are remembered per worker, keyed by the full lookup input (root paths, name, format). Only lookups inside the vendor directory and the active packages are kept; anything else (`fileadmin/`, `var/`, paths with `..`) is resolved on every call. Code there changes only with a deployment, which starts new workers; a template edited inside a running worker is not noticed, so keep the switch off for local template work. `open_basedir` is untouched. Bound: `KOH_WORKER_TEMPLATE_PATH_MEMO_MAX_ENTRIES` (default 8192).
+
+The worker alternation test runs once more with both switches on (`test:worker-alternation:memo`).
 
 ### CacheHashRedirectMiddleware
 

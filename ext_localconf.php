@@ -47,3 +47,10 @@ $GLOBALS['TYPO3_CONF_VARS']['LOG']['Koh']['FrankenPHP']['Service']['CaddyCacheSe
     \Koh\FrankenPHP\Messenger\EdgePurgeRouting::asyncModeEnabled(),
     \Koh\FrankenPHP\Messenger\EdgePurgeRouting::switchedOn(),
 );
+
+// KOH_WORKER_CACHE_MEMO=1: read-mostly caches (hash, rootline, ...) get a
+// frontend that, in a FrankenPHP worker, skips the HMAC check and unserialize()
+// for backend payloads it has already verified byte for byte. Every read still
+// goes to the backend, so flushes on any pod apply at once. See
+// WorkerMemoVariableFrontend. Off: nothing changes.
+\Koh\FrankenPHP\Cache\WorkerCacheMemo::configure($GLOBALS['TYPO3_CONF_VARS']['SYS']['caching']['cacheConfigurations']);
