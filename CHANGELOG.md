@@ -3,6 +3,17 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.11.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.10.1...v5.11.0) (2026-11-10)
+
+### :sparkles: Features
+
+* **worker:** worker memos for cache payloads and Fluid file lookups ([e543816](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/e543816e3536d2a7633bbf34c3a849d0d93dce46))
+
+### :white_check_mark: Tests
+
+* **worker:** pin the memo switches, bounds and lookup keys ([373f6f8](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/373f6f80e86250e84f8bca07ad666945e79c0b86))
+* **worker:** run the worker alternation test with the worker memos on ([46b1822](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/46b182292ad641c74f0951ee07f1cfc600c49fff))
+
 ## [5.10.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.10.0...v5.10.1) (2026-11-09)
 
 ### :bug: Fixes
