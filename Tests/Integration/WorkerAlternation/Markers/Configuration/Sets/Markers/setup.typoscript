@@ -56,6 +56,21 @@ page {
         50.wrap = <li data-marker="ts.link.self">|</li>
     }
 
+    # The main menu: both pages of the site, the current one marked.
+    30 = HMENU
+    30 {
+        special = list
+        wrap = <ul id="worker-alternation-menu">|</ul>
+        1 = TMENU
+        1 {
+            NO.wrapItemAndSub = <li data-menu="no">|</li>
+            ACT = 1
+            ACT.wrapItemAndSub = <li data-menu="act">|</li>
+            CUR = 1
+            CUR.wrapItemAndSub = <li data-menu="cur">|</li>
+        }
+    }
+
     # The last content object: the global request must still be this one.
     90 = USER_INT
     90.userFunc = Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\MarkerRenderer->renderLate
@@ -64,6 +79,37 @@ page {
     100 = TEXT
     100.value = <!--worker-alternation-late-->
 }
+
+# Head tags that go through MetaTagManagerRegistry (page.meta here, the
+# description and Open Graph tags from the page record through EXT:seo),
+# next to canonical and hreflang from EXT:seo and JSON-LD in the header data.
+page.meta {
+    og:url.attribute = property
+    og:url.typolink {
+        parameter.data = page:uid
+        forceAbsoluteUrl = 1
+        returnLast = url
+    }
+}
+page.headerData.30 = COA
+page.headerData.30 {
+    wrap = <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage",|}</script>
+    10 = TEXT
+    10.typolink {
+        parameter.data = page:uid
+        forceAbsoluteUrl = 1
+        returnLast = url
+    }
+    10.wrap = "@id":"|#webpage",
+    20 < .10
+    20.wrap = "url":"|"
+}
+
+[site("identifier") == "site-a"]
+    page.30.special.value = 1,2
+[site("identifier") == "site-b"]
+    page.30.special.value = 10,11
+[END]
 
 # Forms of the form framework, rendered on the page itself (no content
 # element needed): the single-page form on the second page of each site, the

@@ -6,6 +6,7 @@ namespace Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers;
 
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Core\Attribute\AsAllowedCallable;
+use TYPO3\CMS\Core\MetaTag\MetaTagManagerRegistry;
 use TYPO3\CMS\Core\Page\AssetCollector;
 use TYPO3\CMS\Core\Page\PageRenderer;
 use TYPO3\CMS\Core\Site\Entity\SiteLanguage;
@@ -18,7 +19,10 @@ use TYPO3\CMS\Frontend\Page\PageInformation;
  * language through PageRenderer and through AssetCollector. Each carries the
  * key "<page uid>-<language id>". A PageRenderer or AssetCollector kept from
  * an earlier request would print that request's assets as well, which the
- * runner sees as a second key or a duplicate. The style sheets are external
+ * runner sees as a second key or a duplicate. The meta tag `wa-mt` goes
+ * through an extension's own meta tag manager (MarkerMetaTagManager) and is
+ * added without replacing: a manager kept from an earlier request would
+ * print that request's key instead. The style sheets are external
  * URLs: nothing loads them, and TYPO3 does not look for local files.
  */
 final class PageAssets
@@ -39,6 +43,10 @@ final class PageAssets
         // PageRenderer prints the block name as a comment: /*wa-pr-js-<key>*/
         $pageRenderer->addJsInlineCode('wa-pr-js-' . $key, 'window.waPageRenderer = "' . $key . '";');
         $pageRenderer->addCssFile('https://assets.example/wa-pr-css-' . $key . '.css');
+
+        GeneralUtility::makeInstance(MetaTagManagerRegistry::class)
+            ->getManagerForProperty('wa-mt')
+            ->addProperty('wa-mt', 'wa-mt-' . $key);
 
         $assetCollector = GeneralUtility::makeInstance(AssetCollector::class);
         $assetCollector->addInlineJavaScript('wa-ac-js-' . $key, '/* wa-ac-js-' . $key . ' */ window.waAssetCollector = "' . $key . '";');

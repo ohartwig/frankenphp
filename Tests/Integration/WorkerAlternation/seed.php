@@ -7,7 +7,8 @@ declare(strict_types=1);
  * project's database. Usage: php seed.php <project-dir>
  *
  * Both sites use the same slugs, so the host is the only thing that tells
- * a request for site A from one for site B.
+ * a request for site A from one for site B. Every page has its own
+ * description and Open Graph title and description.
  */
 
 use TYPO3\CMS\Core\Core\Bootstrap;
@@ -49,6 +50,11 @@ foreach ($pages as $sorting => [$uid, $pid, $language, $parent, $siteRoot, $titl
         'l10n_source' => $parent,
         'is_siteroot' => $siteRoot,
         'title' => $title,
+        // What EXT:seo renders as description and Open Graph tags; each
+        // page has its own, see check.php.
+        'description' => 'Description of ' . $title,
+        'og_title' => 'OG title of ' . $title,
+        'og_description' => 'OG description of ' . $title,
         'slug' => $slug,
         'doktype' => 1,
         'hidden' => 0,
