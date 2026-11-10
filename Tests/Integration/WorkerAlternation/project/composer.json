@@ -13,7 +13,8 @@
         "typo3/cms-fluid": "^14.0",
         "typo3/cms-form": "^14.0",
         "typo3/cms-frontend": "^14.0",
-        "typo3/cms-install": "^14.0"
+        "typo3/cms-install": "^14.0",
+        "typo3/cms-seo": "^14.0"
     },
     "repositories": [
         {

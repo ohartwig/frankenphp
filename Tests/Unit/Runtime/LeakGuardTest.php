@@ -178,4 +178,79 @@ final class LeakGuardTest extends TestCase
 
         self::assertSame(['check' => 'indpenv:TYPO3_SSL', 'expected' => 'true', 'actual' => 'false'], $finding);
     }
+
+    private static function page(string $ogUrl): string
+    {
+        return '<!DOCTYPE html><html lang="en-GB"><head><meta property="og:url" content="' . htmlspecialchars($ogUrl) . '" />'
+            . '<meta name="description" content="x" /></head><body><meta property="og:url" content="https://elsewhere.test/" /></body></html>';
+    }
+
+    #[Test]
+    public function anOgUrlOfThisPageIsNoFinding(): void
+    {
+        self::assertNull(LeakGuard::checkHead(
+            self::server('Site-B.test:8080', '/en/Second-Page/?x=1'),
+            self::page('http://site-b.test:8080/en/second-page'),
+            self::request('http://site-b.test:8080/en/second-page', 'http://site-b.test:8080/en/'),
+        ));
+    }
+
+    #[Test]
+    public function aPageWithoutOgUrlIsNoFinding(): void
+    {
+        self::assertNull(LeakGuard::checkHead(self::server('site-b.test', '/en/'), '<html><head><title>x</title></head></html>', null));
+    }
+
+    /** A route enhancer: /blog/page-2 renders the page /blog. */
+    #[Test]
+    public function aRequestBelowTheOgUrlIsNoFinding(): void
+    {
+        self::assertNull(LeakGuard::checkHead(
+            self::server('site-b.test', '/en/blog/page-2'),
+            self::page('https://site-b.test/en/blog'),
+            self::request('https://site-b.test/en/blog/page-2', 'https://site-b.test/en/'),
+        ));
+    }
+
+    #[Test]
+    public function theOgUrlOfAnotherPageIsAFinding(): void
+    {
+        self::assertSame(
+            ['check' => 'og_url_path', 'expected' => '/kontakt', 'actual' => 'https://site-b.test/podcasts'],
+            LeakGuard::checkHead(self::server('site-b.test', '/kontakt'), self::page('https://site-b.test/podcasts'), null),
+        );
+    }
+
+    /** Every page of a language is below its root; that is no evidence. */
+    #[Test]
+    public function theLanguageRootAsOgUrlOfAnotherPageIsAFinding(): void
+    {
+        self::assertSame(
+            'og_url_path',
+            LeakGuard::checkHead(
+                self::server('site-b.test', '/en/open-source'),
+                self::page('https://site-b.test/en/'),
+                self::request('https://site-b.test/en/open-source', 'https://site-b.test/en/'),
+            )['check'] ?? null,
+        );
+    }
+
+    #[Test]
+    public function anOgUrlOnAnotherHostIsAFinding(): void
+    {
+        self::assertSame(
+            ['check' => 'og_url_host', 'expected' => 'site-a.test', 'actual' => 'http://site-b.test:8080/'],
+            LeakGuard::checkHead(self::server('site-a.test:8080', '/'), self::page('http://site-b.test:8080/'), null),
+        );
+    }
+
+    #[Test]
+    public function onlyHtmlPagesWithStatus200AreChecked(): void
+    {
+        self::assertTrue(LeakGuard::isHtmlPage(200, ['X-Foo: bar', 'Content-Type: text/html; charset=utf-8']));
+        self::assertFalse(LeakGuard::isHtmlPage(404, ['Content-Type: text/html; charset=utf-8']));
+        self::assertFalse(LeakGuard::isHtmlPage(200, ['Content-Type: application/xml']));
+        self::assertFalse(LeakGuard::isHtmlPage(200, []));
+        self::assertFalse(LeakGuard::isHtmlPage(false, ['Content-Type: text/html']));
+    }
 }

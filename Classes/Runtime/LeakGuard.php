@@ -27,6 +27,9 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  *   / when the default language lives under /de/ - so its path is no
  *   evidence of a leak.
  *
+ * checkHead() adds the one check on the page itself: its og:url must name
+ * the request's host and page.
+ *
  * Hosts compare without port and case, paths decoded and without case. A
  * missing global request is no finding: a request can end before TYPO3 sets
  * it. The checks are deliberately few and exact: a finding costs the request
@@ -111,6 +114,87 @@ final class LeakGuard
         GeneralUtility::flushInternalRuntimeCaches();
 
         return null;
+    }
+
+    /**
+     * Compares the page's og:url with the request.
+     *
+     * Meta tags are collected in MetaTagManagerRegistry, a registry that
+     * outlives the request with a persistent bootstrap; a manager carried
+     * over from an earlier request makes the page claim that request's URL,
+     * description and title. og:url is the one of them that can be checked
+     * against the request exactly: TYPO3 renders it as a link to the page
+     * itself.
+     *
+     * - `og_url_host`: an absolute og:url on another host;
+     * - `og_url_path`: an og:url for another page. The request may go
+     *   further below the og:url (a route enhancer: /blog/page-2 for the
+     *   page /blog), except below the language's root, which every path of
+     *   that language is below.
+     *
+     * Only an HTML response with status 200 is looked at, only its <head>,
+     * and only the first og:url in it.
+     *
+     * @param array<string, mixed> $server        the request's $_SERVER
+     * @param string               $content       the response body
+     * @param mixed                $globalRequest $GLOBALS['TYPO3_REQUEST'] ?? null
+     *
+     * @return array{check: string, expected: string, actual: string}|null
+     */
+    public static function checkHead(array $server, string $content, mixed $globalRequest): ?array
+    {
+        $headEnd = stripos($content, '</head>');
+        $head = $headEnd === false ? substr($content, 0, 65536) : substr($content, 0, $headEnd);
+        if (preg_match('#<meta\b[^>]*\bproperty=["\']og:url["\'][^>]*>#i', $head, $tag) !== 1
+            || preg_match('#\bcontent=(["\'])(.*?)\1#is', $tag[0], $attribute) !== 1) {
+            return null;
+        }
+        $url = html_entity_decode($attribute[2], ENT_QUOTES | ENT_HTML5);
+        $parts = parse_url($url);
+        if ($parts === false) {
+            return null;
+        }
+        $host = self::host((string) ($server['HTTP_HOST'] ?? ''));
+        if (isset($parts['host']) && $host !== '' && self::host($parts['host']) !== $host) {
+            return self::finding('og_url_host', $host, $url);
+        }
+        $path = rtrim(self::path((string) parse_url((string) ($server['REQUEST_URI'] ?? '/'), PHP_URL_PATH)), '/');
+        $ogPath = rtrim(self::path($parts['path'] ?? '/'), '/');
+        if ($ogPath === $path) {
+            return null;
+        }
+        $languageRoot = '';
+        if ($globalRequest instanceof ServerRequestInterface) {
+            $language = $globalRequest->getAttribute('language');
+            if ($language instanceof SiteLanguage) {
+                $languageRoot = rtrim(self::path($language->getBase()->getPath()), '/');
+            }
+        }
+        if ($ogPath !== '' && $ogPath !== $languageRoot && str_starts_with($path, $ogPath . '/')) {
+            return null;
+        }
+
+        return self::finding('og_url_path', (string) ($server['REQUEST_URI'] ?? '/'), $url);
+    }
+
+    /**
+     * Whether the response about to be sent is an HTML page with status 200,
+     * the only kind checkHead() looks at.
+     *
+     * @param list<string> $headers headers_list()
+     */
+    public static function isHtmlPage(int|bool $status, array $headers): bool
+    {
+        if ($status !== 200) {
+            return false;
+        }
+        foreach ($headers as $header) {
+            if (stripos($header, 'content-type:') === 0) {
+                return stripos($header, 'text/html') !== false;
+            }
+        }
+
+        return false;
     }
 
     /**

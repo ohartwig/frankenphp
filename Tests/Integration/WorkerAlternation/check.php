@@ -16,7 +16,11 @@ declare(strict_types=1);
  *
  * Beyond the markers, each response must carry exactly its own <title> and
  * its own PageRenderer and AssetCollector assets (no other page's, no
- * duplicates), and a request time from the seconds it was under way.
+ * duplicates), and a request time from the seconds it was under way. Its
+ * head must describe it and nothing else: description and Open Graph tags
+ * (EXT:seo and page.meta, through MetaTagManagerRegistry), a meta tag of an
+ * extension's own meta tag manager, canonical, hreflang, html lang, JSON-LD
+ * @id and url, and the main menu must mark this page as the current one.
  *
  * Between the page requests it fills in forms of the form framework on both
  * sites and in both languages (see the form scenarios below), POSTs that run
@@ -44,8 +48,8 @@ $sites = [
     'site-b' => ['host' => 'site-b.test', 'label' => 'Site B', 'pages' => [10 => 11, 11 => 10]],
 ];
 $languages = [
-    0 => ['code' => 'de', 'prefix' => '/', 'titles' => ['Startseite', 'Zweite Seite'], 'slugs' => ['', 'zweite-seite'], 'greeting' => 'Hallo', 'overlayType' => 'includeFloating', 'fallbackChain' => 'pageNotFound'],
-    1 => ['code' => 'en', 'prefix' => '/en/', 'titles' => ['Home', 'Second Page'], 'slugs' => ['', 'second-page'], 'greeting' => 'Hello', 'overlayType' => 'mixed', 'fallbackChain' => '0,pageNotFound'],
+    0 => ['code' => 'de', 'hreflang' => 'de-DE', 'prefix' => '/', 'titles' => ['Startseite', 'Zweite Seite'], 'slugs' => ['', 'zweite-seite'], 'greeting' => 'Hallo', 'overlayType' => 'includeFloating', 'fallbackChain' => 'pageNotFound'],
+    1 => ['code' => 'en', 'hreflang' => 'en-GB', 'prefix' => '/en/', 'titles' => ['Home', 'Second Page'], 'slugs' => ['', 'second-page'], 'greeting' => 'Hello', 'overlayType' => 'mixed', 'fallbackChain' => '0,pageNotFound'],
 ];
 
 /**
@@ -70,12 +74,35 @@ foreach ($sites as $identifier => $site) {
             $title = $site['label'] . ' ' . $language['titles'][$index];
             $key = sprintf('%s/%s/%d', $identifier, $language['code'], $pageId);
             $terms = 'Site A ' . $language['greeting'] . ',Site B ' . $language['greeting'];
+            $hreflang = [];
+            foreach ($languages as $alternative) {
+                $hreflang[$alternative['hreflang']] = 'http://' . $authority . $alternative['prefix'] . $alternative['slugs'][$index];
+            }
+            $hreflang['x-default'] = $hreflang[$languages[0]['hreflang']];
+            ksort($hreflang);
             $targets[$key] = [
                 'url' => 'http://' . $authority . $path,
                 'host' => $site['host'],
                 'path' => $path,
                 'assetKey' => $pageId . '-' . $languageId,
                 'title' => $site['label'] . ': ' . $title,
+                // The head: what EXT:seo, page.meta and the header data
+                // render for this page and language, see seed.php and the
+                // markers site set.
+                'head' => [
+                    'html.lang' => [$language['hreflang']],
+                    'meta.description' => ['Description of ' . $title],
+                    'meta.og:title' => ['OG title of ' . $title],
+                    'meta.og:description' => ['OG description of ' . $title],
+                    'meta.og:url' => ['http://' . $authority . $path],
+                    'meta.wa-mt' => ['wa-mt-' . $pageId . '-' . $languageId],
+                    'canonical' => ['http://' . $authority . $path],
+                    'hreflang' => [implode(' ', array_map(static fn(string $code, string $url): string => $code . '=' . $url, array_keys($hreflang), $hreflang))],
+                    'jsonld.@id' => ['http://' . $authority . $path . '#webpage'],
+                    'jsonld.url' => ['http://' . $authority . $path],
+                    'menu.cur' => [$path],
+                    'menu.act' => $index === 0 ? [] : [$language['prefix']],
+                ],
                 'expected' => [
                     'indpenv.http_host' => $authority,
                     'indpenv.request_host' => 'http://' . $authority,
@@ -175,6 +202,60 @@ foreach ($keys as $key) {
     array_push($sequence, $key, $key);
 }
 
+/**
+ * What a page says about itself in its head, and its menu: every value of
+ * each kind, in document order (hreflang as one sorted line).
+ *
+ * @return array<string, list<string>>
+ */
+$headFacts = static function (string $body): array {
+    $decode = static fn(string $value): string => html_entity_decode($value, ENT_QUOTES | ENT_HTML5);
+    $facts = [];
+    $headEnd = stripos($body, '</head>');
+    $head = $headEnd === false ? $body : substr($body, 0, $headEnd);
+    if (preg_match('#<html\b[^>]*\blang="([^"]*)"#', $body, $match)) {
+        $facts['html.lang'][] = $match[1];
+    }
+    preg_match_all('#<meta\b[^>]*>#', $head, $tags);
+    foreach ($tags[0] as $tag) {
+        if (preg_match('#\b(?:name|property)="([^"]*)"#', $tag, $name) && preg_match('#\bcontent="([^"]*)"#', $tag, $content)) {
+            $facts['meta.' . $name[1]][] = $decode($content[1]);
+        }
+    }
+    $hreflang = [];
+    preg_match_all('#<link\b[^>]*>#', $head, $links);
+    foreach ($links[0] as $link) {
+        if (!preg_match('#\brel="([^"]*)"#', $link, $rel) || !preg_match('#\bhref="([^"]*)"#', $link, $href)) {
+            continue;
+        }
+        if ($rel[1] === 'canonical') {
+            $facts['canonical'][] = $decode($href[1]);
+        } elseif ($rel[1] === 'alternate' && preg_match('#\bhreflang="([^"]*)"#', $link, $code)) {
+            $hreflang[$code[1]] = $code[1] . '=' . $decode($href[1]);
+        }
+    }
+    if ($hreflang !== []) {
+        ksort($hreflang);
+        $facts['hreflang'][] = implode(' ', $hreflang);
+    }
+    preg_match_all('#<script\b[^>]*type="application/ld\+json"[^>]*>(.*?)</script>#s', $body, $scripts);
+    foreach ($scripts[1] as $json) {
+        $data = json_decode($json, true);
+        foreach (['@id', 'url'] as $field) {
+            $facts['jsonld.' . $field][] = is_array($data) && is_string($data[$field] ?? null) ? $data[$field] : '(unparsable)';
+        }
+    }
+    preg_match_all('#<li data-menu="(no|act|cur)"><a\b[^>]*\bhref="([^"]*)"#', $body, $items, PREG_SET_ORDER);
+    $facts['menu.act'] = [];
+    foreach ($items as [, $state, $href]) {
+        if ($state !== 'no') {
+            $facts['menu.' . $state][] = (string) parse_url($decode($href), PHP_URL_PATH);
+        }
+    }
+
+    return $facts;
+};
+
 $curl = curl_init();
 curl_setopt_array($curl, [
     CURLOPT_RESOLVE => [
@@ -218,7 +299,7 @@ $started = microtime(true);
  */
 $send = function (string $key, ?string $url = null, ?array $post = null, array $ownValues = [], bool $strict = true) use (
     &$failures, &$warnings, &$appendLength, &$previousTimestamp, &$token, &$firstCount, &$lastCount,
-    &$tokens, &$pids, &$number, &$posts, &$submitted, $targets, $curl,
+    &$tokens, &$pids, &$number, &$posts, &$submitted, $targets, $curl, $headFacts,
 ): array|string|null {
     $target = $targets[$key];
     $url ??= $target['url'];
@@ -324,6 +405,19 @@ $send = function (string $key, ?string $url = null, ?array $post = null, array $
     foreach ($found as $kind => $assetKeys) {
         if ($assetKeys !== [$target['assetKey']]) {
             $failures[] = sprintf('%s: asset wa-%s found for %s, expected exactly [%s]', $label, $kind, $assetKeys === [] ? 'nothing' : '[' . implode(', ', $assetKeys) . ']', $target['assetKey']);
+        }
+    }
+
+    // The head, and the menu: each tag exactly once and this page's.
+    // Canonical only for a GET: a form action's arguments may go into it.
+    $head = $headFacts($body);
+    foreach ($target['head'] as $name => $expected) {
+        if ($name === 'canonical' && $post !== null) {
+            continue;
+        }
+        $actual = $head[$name] ?? [];
+        if ($actual !== $expected) {
+            $failures[] = sprintf('%s: head %s is %s, expected %s', $label, $name, json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), json_encode($expected, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
         }
     }
 
@@ -764,7 +858,7 @@ if ($failures !== []) {
     // Which checks failed, over the whole run; the details below are cut short.
     $byCheck = [];
     foreach ($failures as $failure) {
-        $check = preg_replace(['#^\#\d+ (GET|POST) \S+ \([^)]+\): #', '#^\#\d+ form: \S+: #', '#^(marker \S+|asset \S+|<title>|HTTP \d+|served by another worker|worker request count|form value).*$#s'], ['', 'form: ', '$1'], $failure);
+        $check = preg_replace(['#^\#\d+ (GET|POST) \S+ \([^)]+\): #', '#^\#\d+ form: \S+: #', '#^(marker \S+|asset \S+|head \S+|<title>|HTTP \d+|served by another worker|worker request count|form value).*$#s'], ['', 'form: ', '$1'], $failure);
         $byCheck[$check] = ($byCheck[$check] ?? 0) + 1;
     }
     arsort($byCheck);

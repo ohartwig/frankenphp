@@ -54,6 +54,13 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  * Bootstrap::init() decides them per request (displayErrors -1 depends on the
  * client address).
  *
+ * Keeping an object also keeps what a request writes into it. So the property
+ * values of every kept object (services, singleton instances, objects in
+ * globals) are recorded as well, and put back before each request
+ * (KeptObjectState): MetaTagManagerRegistry, for one, creates its managers on
+ * first use and keeps them, with the previous page's description and Open
+ * Graph tags, in the boot's instance.
+ *
  * Not covered: static properties of classes. Nothing resets them, in this
  * mode or with a bootstrap per request; MAX_REQUESTS bounds how long they
  * grow.
@@ -65,6 +72,34 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 final class PersistentBootstrap
 {
     public const ENV = 'KOH_PERSISTENT_BOOTSTRAP';
+
+    /**
+     * Diagnostics: log the kept objects once, and after every request what it
+     * changed in them before that is undone (koh_worker_kept and
+     * koh_worker_drift JSON lines). For finding request state in boot
+     * objects; costs a comparison of every kept property per request.
+     */
+    public const AUDIT_ENV = 'KOH_PERSISTENT_BOOTSTRAP_AUDIT';
+
+    /** How far the audit follows kept objects' properties into further objects. */
+    private const AUDIT_DEPTH = 4;
+
+    /**
+     * Classes of one request's state. A kept object that points to one of
+     * them was given request state by the boot; the audit reports it.
+     */
+    private const REQUEST_STATE_CLASSES = [
+        Context::class,
+        \Psr\Http\Message\ServerRequestInterface::class,
+        \TYPO3\CMS\Core\Site\Entity\SiteInterface::class,
+        \TYPO3\CMS\Core\Site\Entity\SiteLanguage::class,
+        \TYPO3\CMS\Core\Localization\LanguageService::class,
+        \TYPO3\CMS\Frontend\Page\PageInformation::class,
+        \TYPO3\CMS\Core\TypoScript\FrontendTypoScript::class,
+        \TYPO3\CMS\Core\Page\PageRenderer::class,
+        \TYPO3\CMS\Core\Page\AssetCollector::class,
+        \TYPO3\CMS\Core\Authentication\AbstractUserAuthentication::class,
+    ];
 
     /** The boot whose state is kept: the first one that could run on warm caches. */
     private const BOOTS_BEFORE_KEEPING = 2;
@@ -110,6 +145,22 @@ final class PersistentBootstrap
     /** @var array<string, mixed> */
     private array $bootGlobals = [];
 
+    /** The property values of every kept object, as the boot left them. */
+    private ?KeptObjectState $keptState = null;
+
+    /** Whether to log what requests change in kept objects (AUDIT_ENV). */
+    private bool $audit;
+
+    /** Audit only: the kept objects and what they point to, compared after each request. */
+    private ?KeptObjectState $auditState = null;
+
+    /**
+     * Audit only: static properties when the request started.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $auditStatics = null;
+
     /** @var \Closure(ClassLoader): ContainerInterface */
     private \Closure $boot;
 
@@ -120,8 +171,9 @@ final class PersistentBootstrap
      * @param (\Closure(ClassLoader): ContainerInterface)|null $boot               for tests: instead of SystemEnvironmentBuilder::run() and Bootstrap::init()
      * @param (\Closure(): void)|null                          $refreshEnvironment for tests: instead of what is set up again per request (time globals, error handling, time zone)
      */
-    public function __construct(?\Closure $boot = null, ?\Closure $refreshEnvironment = null)
+    public function __construct(?\Closure $boot = null, ?\Closure $refreshEnvironment = null, ?bool $audit = null)
     {
+        $this->audit = $audit ?? WorkerSwitch::isOn(self::AUDIT_ENV);
         $this->boot = $boot ?? static function (ClassLoader $classLoader): ContainerInterface {
             SystemEnvironmentBuilder::run(0, SystemEnvironmentBuilder::REQUESTTYPE_FE);
 
@@ -206,6 +258,20 @@ final class PersistentBootstrap
     public function afterRequest(): void
     {
         if ($this->container !== null) {
+            if ($this->auditState !== null) {
+                $drift = $this->auditState->drift();
+                $statics = [];
+                if ($this->auditStatics !== null) {
+                    foreach (KeptObjectState::statics() as $name => $value) {
+                        if (array_key_exists($name, $this->auditStatics) && $this->auditStatics[$name] !== $value) {
+                            $statics[] = $name;
+                        }
+                    }
+                }
+                if ($drift !== [] || $statics !== []) {
+                    error_log((string) json_encode(['koh_worker_drift' => count($drift), 'objects' => $drift, 'statics' => $statics], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+                }
+            }
             $this->resetContainer();
         }
     }
@@ -232,7 +298,39 @@ final class PersistentBootstrap
         if ($this->firstBootGlobals !== null) {
             $this->bootGlobals = array_intersect_key($this->bootGlobals, $this->firstBootGlobals);
         }
+        $this->keptState = KeptObjectState::capture($this->keptObjects(), [ClassLoader::class]);
         $this->container = $container;
+        if ($this->audit) {
+            $this->auditState = KeptObjectState::capture($this->keptObjects(), [ClassLoader::class], self::AUDIT_DEPTH);
+            error_log((string) json_encode([
+                'koh_worker_kept' => $this->keptState->count(),
+                'observed' => $this->auditState->count(),
+                'request_references' => $this->keptState->requestReferences(self::REQUEST_STATE_CLASSES),
+                'objects' => $this->keptState->objects(),
+            ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+        }
+    }
+
+    /**
+     * Every object the next request gets from the boot: services, singleton
+     * instances, objects in globals.
+     *
+     * @return \Generator<string, mixed>
+     */
+    private function keptObjects(): \Generator
+    {
+        foreach ($this->bootServices as $id => $service) {
+            yield 'service:' . $id => $service;
+        }
+        foreach ($this->bootPrivates as $id => $service) {
+            yield 'private:' . $id => $service;
+        }
+        foreach ($this->bootSingletons as $class => $instance) {
+            yield 'singleton:' . $class => $instance;
+        }
+        foreach ($this->bootGlobals as $name => $value) {
+            yield 'global:' . $name => $value;
+        }
     }
 
     /**
@@ -262,6 +360,9 @@ final class PersistentBootstrap
             $container,
             Container::class,
         )();
+        // What the request wrote into kept objects: undone, so the next one
+        // finds them as a fresh boot would leave them.
+        $this->keptState?->restore();
     }
 
     private function prepareRequest(Container $container): void
@@ -272,6 +373,9 @@ final class PersistentBootstrap
         // RequestStateReset::resetRequestState() emptied both.
         GeneralUtility::setContainer($container);
         GeneralUtility::resetSingletonInstances($this->bootSingletons);
+        if ($this->auditState !== null) {
+            $this->auditStatics = KeptObjectState::statics();
+        }
     }
 
     private function restoreGlobals(): void
