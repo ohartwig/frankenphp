@@ -55,6 +55,56 @@ final class WorkerCacheMemoTest extends TestCase
     }
 
     #[Test]
+    public function aMissingOrForeignCacheDoesNotStopTheOthers(): void
+    {
+        $configurations = [
+            'custom' => ['frontend' => 'Vendor\\OwnFrontend'],
+            'hash' => ['frontend' => '\\' . VariableFrontend::class],
+            'rootline' => [],
+        ];
+
+        $switched = WorkerCacheMemo::configure($configurations, true, ['missing', 'custom', 'hash', 'rootline']);
+
+        self::assertSame(['hash', 'rootline'], $switched, 'a leading backslash is the same class');
+    }
+
+    #[Test]
+    public function theEnvironmentDecidesWhenNothingIsPassed(): void
+    {
+        $configurations = ['hash' => [], 'rootline' => []];
+        self::assertSame([], WorkerCacheMemo::configure($configurations));
+
+        putenv(WorkerCacheMemo::ENV . '=1');
+        putenv(WorkerCacheMemo::ENV_CACHES . '=rootline');
+        self::assertSame(['rootline'], WorkerCacheMemo::configure($configurations));
+        self::assertArrayNotHasKey('frontend', $configurations['hash']);
+    }
+
+    #[Test]
+    public function inAWorkerWithTheSwitchOnTheMemoIsActiveAndShared(): void
+    {
+        require_once __DIR__ . '/../../Fixtures/frankenphp_handle_request.php';
+        $backup = $_SERVER['FRANKENPHP_WORKER'] ?? null;
+        $_SERVER['FRANKENPHP_WORKER'] = '1';
+        try {
+            self::assertFalse(WorkerCacheMemo::isActive(), 'switch off');
+            self::assertNull(VerifiedPayloadMemo::active());
+
+            putenv(WorkerCacheMemo::ENV . '=1');
+            self::assertTrue(WorkerCacheMemo::isActive());
+            $memo = VerifiedPayloadMemo::active();
+            self::assertNotNull($memo);
+            self::assertSame($memo, VerifiedPayloadMemo::active(), 'one memo per process');
+        } finally {
+            if ($backup === null) {
+                unset($_SERVER['FRANKENPHP_WORKER']);
+            } else {
+                $_SERVER['FRANKENPHP_WORKER'] = $backup;
+            }
+        }
+    }
+
+    #[Test]
     public function theCacheListComesFromTheEnvironment(): void
     {
         self::assertSame(WorkerCacheMemo::DEFAULT_CACHES, WorkerCacheMemo::cacheIdentifiers());

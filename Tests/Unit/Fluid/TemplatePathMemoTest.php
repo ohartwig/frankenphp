@@ -39,7 +39,7 @@ final class TemplatePathMemoTest extends TestCase
     #[DataProvider('paths')]
     public function onlyCodeDirectoriesAreCovered(string $path, bool $covered): void
     {
-        $memo = new TemplatePathMemo(['/app/vendor', '/app/packages/site/', 'relative/root', '/app/x/../y']);
+        $memo = new TemplatePathMemo(['relative/root', '/app/vendor', '/app/packages/site/', '/app/vendor/', '/app/x/../y']);
 
         self::assertSame($covered, $memo->covers($path));
         self::assertSame(['/app/vendor/', '/app/packages/site/'], $memo->codeRoots());
@@ -68,6 +68,75 @@ final class TemplatePathMemoTest extends TestCase
             self::assertNull(TemplatePathMemo::active());
         } finally {
             if ($backup !== null) {
+                $_SERVER['FRANKENPHP_WORKER'] = $backup;
+            }
+        }
+    }
+
+    #[Test]
+    public function eachKindOfLookupIsRecordedOnceAndCountsAgainstTheBound(): void
+    {
+        $memo = new TemplatePathMemo(['/app/vendor/'], 4);
+        $memo->rememberSanitized('EXT:a/', '/app/vendor/a/');
+        $memo->rememberSanitized('EXT:a/', '/app/vendor/other/');
+        $memo->rememberResolved('k', '/app/vendor/a/B.html');
+        $memo->rememberResolved('k', ['/app/vendor/a/C.html']);
+        $memo->rememberIdentifier('/app/vendor/a/B.html', 'template_B');
+        $memo->rememberIdentifier('/app/vendor/a/B.html', 'template_X');
+        $memo->rememberExisting('/app/vendor/a/B.html');
+        $memo->rememberExisting('/app/vendor/a/B.html');
+
+        self::assertSame(4, $memo->count());
+        self::assertSame('/app/vendor/a/', $memo->sanitized('EXT:a/'));
+        self::assertSame('/app/vendor/a/B.html', $memo->resolved('k'));
+        self::assertSame('template_B', $memo->identifier('/app/vendor/a/B.html'));
+        self::assertTrue($memo->isKnownToExist('/app/vendor/a/B.html'));
+        self::assertFalse($memo->isKnownToExist('/app/vendor/a/C.html'));
+
+        $memo->rememberSanitized('EXT:b/', '/app/vendor/b/');
+        $memo->rememberResolved('l', '/app/vendor/b/B.html');
+        $memo->rememberIdentifier('/app/vendor/b/B.html', 'template_b');
+        $memo->rememberExisting('/app/vendor/b/B.html');
+        self::assertSame(4, $memo->count(), 'full: nothing more is recorded');
+        self::assertNull($memo->sanitized('EXT:b/'));
+        self::assertNull($memo->resolved('l'));
+        self::assertNull($memo->identifier('/app/vendor/b/B.html'));
+        self::assertFalse($memo->isKnownToExist('/app/vendor/b/B.html'));
+    }
+
+    #[Test]
+    public function aFileNameWhoseOnlyDotSegmentIsAtTheEndIsNotCovered(): void
+    {
+        $memo = new TemplatePathMemo(['/app/vendor/']);
+
+        self::assertFalse($memo->coversAll(['/app/vendor/a/'], 'x/..'));
+        self::assertFalse($memo->coversAll(['/app/vendor/a/'], '.'));
+    }
+
+    #[Test]
+    public function aSetInstanceIsTheActiveOne(): void
+    {
+        $memo = new TemplatePathMemo(['/app/vendor/']);
+        TemplatePathMemo::setInstance($memo);
+
+        self::assertSame($memo, TemplatePathMemo::active());
+    }
+
+    #[Test]
+    public function inAWorkerWithTheSwitchOnTheMemoIsActive(): void
+    {
+        require_once __DIR__ . '/../../Fixtures/frankenphp_handle_request.php';
+        $backup = $_SERVER['FRANKENPHP_WORKER'] ?? null;
+        $_SERVER['FRANKENPHP_WORKER'] = '1';
+        try {
+            self::assertNull(TemplatePathMemo::active(), 'switch off');
+            putenv(TemplatePathMemo::ENV . '=1');
+            TemplatePathMemo::setInstance(new TemplatePathMemo(['/app/vendor/']));
+            self::assertNotNull(TemplatePathMemo::active());
+        } finally {
+            if ($backup === null) {
+                unset($_SERVER['FRANKENPHP_WORKER']);
+            } else {
                 $_SERVER['FRANKENPHP_WORKER'] = $backup;
             }
         }

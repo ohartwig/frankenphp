@@ -204,6 +204,109 @@ final class MemoizingTemplatePathsTest extends TestCase
     }
 
     #[Test]
+    public function aSanitisedRootPathIsRememberedForTheNextRequest(): void
+    {
+        $this->memoizing();
+        $dir = $this->code . '/Templates';
+        // The directory is gone: without the memo the path would lose its
+        // trailing slash (is_dir() false).
+        rename($dir, $dir . '-moved');
+        try {
+            self::assertSame([$dir . '/'], $this->memoizing()->getTemplateRootPaths());
+        } finally {
+            rename($dir . '-moved', $dir);
+        }
+    }
+
+    #[Test]
+    public function aRootPathOutsideCodeDirectoriesIsSanitisedEveryTime(): void
+    {
+        $paths = new MemoizingTemplatePaths($this->memo);
+        $paths->setPartialRootPaths([$this->fileadmin . '/Partials']);
+        rename($this->fileadmin . '/Partials', $this->fileadmin . '/Moved');
+
+        $next = new MemoizingTemplatePaths($this->memo);
+        $next->setPartialRootPaths([$this->fileadmin . '/Partials']);
+
+        self::assertSame([$this->fileadmin . '/Partials'], $next->getPartialRootPaths());
+    }
+
+    #[Test]
+    public function theIdentifierOfAFileOutsideCodeDirectoriesFollowsItsMtime(): void
+    {
+        $roots = [$this->fileadmin . '/Partials'];
+        $first = $this->memoizing($roots)->getPartialIdentifier('Teaser');
+        touch($this->fileadmin . '/Partials/Teaser.html', time() - 3600);
+        clearstatcache();
+
+        self::assertNotSame($first, $this->memoizing($roots)->getPartialIdentifier('Teaser'));
+    }
+
+    #[Test]
+    public function theIdentifierOfAMissingFileIsNotRemembered(): void
+    {
+        $paths = $this->memoizing();
+        $method = new \ReflectionMethod($paths, 'createIdentifierForFile');
+        $missing = $this->code . '/Partials/Later.html';
+
+        $before = $method->invoke($paths, $missing);
+        file_put_contents($missing, 'x');
+
+        self::assertNotSame($before, $method->invoke($this->memoizing(), $missing));
+    }
+
+    #[Test]
+    public function resolveFileInPathsThrowsTheCoresExceptionForANegativeLookup(): void
+    {
+        $paths = [$this->code . '/Partials/'];
+        $core = new \ReflectionMethod(TemplatePaths::class, 'resolveFileInPaths');
+        $coreError = null;
+        try {
+            $core->invoke(new TemplatePaths(), $paths, 'Nope', 'html');
+        } catch (InvalidTemplateResourceException $e) {
+            $coreError = $e;
+        }
+        self::assertNotNull($coreError);
+
+        foreach ([1, 2] as $request) {
+            $memoizing = $this->memoizing();
+            try {
+                (new \ReflectionMethod($memoizing, 'resolveFileInPaths'))->invoke($memoizing, $paths, 'Nope', 'html');
+                self::fail('no exception in request ' . $request);
+            } catch (InvalidTemplateResourceException $e) {
+                self::assertSame($coreError->getMessage(), $e->getMessage());
+                self::assertSame($coreError->getCode(), $e->getCode());
+                self::assertSame($coreError->templateName, $e->templateName);
+                self::assertSame($coreError->evaluatedTemplatePaths, $e->evaluatedTemplatePaths);
+            }
+        }
+    }
+
+    #[Test]
+    public function differentFormatsAndNamesAreDifferentLookups(): void
+    {
+        file_put_contents($this->code . '/Partials/Footer.txt', 'text');
+        $paths = $this->memoizing();
+        self::assertSame($this->code . '/Partials/Footer.fluid.html', $paths->getPartialPathAndFilename('Footer'));
+
+        $text = $this->memoizing();
+        $text->setFormat('txt');
+        self::assertSame($this->code . '/Partials/Footer.txt', $text->getPartialPathAndFilename('Footer'));
+        self::assertSame($this->code . '/Partials/Header/All.html', $this->memoizing()->getPartialPathAndFilename('Header/All'));
+    }
+
+    #[Test]
+    public function withoutThrowOnErrorAnExplicitFileIsReturnedUnchecked(): void
+    {
+        $file = $this->code . '/Templates/Page/Nope.html';
+        $paths = $this->memoizing();
+        $paths->setTemplatePathAndFilename($file);
+
+        self::assertSame($file, $paths->resolveTemplateFileForControllerAndActionAndFormat('', ''));
+        self::assertFalse($this->memo->isKnownToExist($file));
+    }
+
+    #[Test]
     public function theMemoStopsRecordingWhenFull(): void
     {
         $this->memo = new TemplatePathMemo([$this->root . '/vendor/'], 2);

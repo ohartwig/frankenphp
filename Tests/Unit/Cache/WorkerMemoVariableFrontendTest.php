@@ -218,6 +218,52 @@ final class WorkerMemoVariableFrontendTest extends TestCase
     }
 
     #[Test]
+    public function aSharedValueCountsWithItsSizeAnObjectPayloadOnlyWithItsBytes(): void
+    {
+        $this->coreFrontend()->set('arrays', array_fill(0, 200, str_repeat('x', 50)));
+        $this->coreFrontend()->set('objects', [new \ArrayObject(['x' => 1])]);
+        $frontend = $this->memoFrontend();
+
+        $frontend->get('objects');
+        self::assertSame(\strlen($this->backend->data['objects']), $this->memo->bytes());
+
+        $frontend->get('arrays');
+        self::assertGreaterThan(
+            \strlen($this->backend->data['objects']) + \strlen($this->backend->data['arrays']),
+            $this->memo->bytes(),
+            'the decoded array is counted too',
+        );
+    }
+
+    #[Test]
+    public function removeForgetsTheEntry(): void
+    {
+        $this->coreFrontend()->set('x', ['v' => 1]);
+        $frontend = $this->memoFrontend();
+        $frontend->get('x');
+        self::assertSame(1, $this->memo->count());
+
+        self::assertTrue($frontend->remove('x'));
+
+        self::assertSame(0, $this->memo->count());
+        self::assertFalse($frontend->get('x'));
+    }
+
+    #[Test]
+    public function flushDoesNotTouchACacheWhoseNameStartsTheSame(): void
+    {
+        $other = new ArrayCacheBackend();
+        (new VariableFrontend('hashes', $other))->set('x', ['v' => 2]);
+        $this->coreFrontend('hash')->set('x', ['v' => 1]);
+        $this->memoFrontend('hash')->get('x');
+        (new WorkerMemoVariableFrontend('hashes', $other))->get('x');
+
+        $this->memoFrontend('hash')->flush();
+
+        self::assertSame(1, $this->memo->count());
+    }
+
+    #[Test]
     public function aMissingEntryIsFalse(): void
     {
         self::assertFalse($this->memoFrontend()->get('nothing'));
