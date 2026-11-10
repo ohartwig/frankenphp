@@ -3,6 +3,17 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.11.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.11.0...v5.11.1) (2026-11-10)
+
+### :bug: Fixes
+
+* **worker:** reset what requests write into objects kept by the persistent bootstrap ([1212f66](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/1212f666a0f22204e462a42d2f91e031d7b129c9))
+
+### :white_check_mark: Tests
+
+* **worker:** do not assume an exact kept-object count in the audit test ([a205b19](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/a205b19b8651fa55de3e9cb0e8caecc7ec37212b))
+* **worker:** check each page's head and menu in the worker alternation test ([da10eb1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/da10eb1aa00ab1b33d834f73a193cdd01b28fd70))
+
 ## [5.11.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.10.1...v5.11.0) (2026-11-10)
 
 ### :sparkles: Features
