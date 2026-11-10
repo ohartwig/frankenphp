@@ -115,6 +115,9 @@ final readonly class FrontendWorker
                     (string) LeakGuard::indpEnv('HTTP_HOST'),
                     $GLOBALS['TYPO3_REQUEST'] ?? null,
                 ) ?? LeakGuard::staleIndpEnv();
+                if ($finding === null && LeakGuard::isHtmlPage(http_response_code(), headers_list())) {
+                    $finding = LeakGuard::checkHead($_SERVER, (string) ob_get_contents(), $GLOBALS['TYPO3_REQUEST'] ?? null);
+                }
             }
         } catch (\Throwable $e) {
             ob_end_clean();

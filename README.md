@@ -46,6 +46,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `DB_REUSE_LIVENESS_CHECK` | `SELECT 1` on a kept connection before the request, so a connection the server dropped is replaced rather than failing the request | `1` |
 | `KOH_CHASH_REDIRECT` | Redirect page URLs that carry parameters without the required cHash to the same URL without them, instead of the 404 (see `CacheHashRedirectMiddleware`); `0` restores the 404 | `1` |
 | `KOH_PERSISTENT_BOOTSTRAP` | Boot TYPO3 once per worker and start every later request from the recorded boot state instead of booting again (see *Persistent bootstrap*); `0` boots per request, as before | `0` |
+| `KOH_PERSISTENT_BOOTSTRAP_AUDIT` | Diagnostics for the persistent bootstrap: log the kept objects and what each request changes in them (see *Persistent bootstrap*, *Audit*) | `0` |
 | `KOH_WORKER_CACHE_MEMO` | Skip the HMAC check (and, for object-free payloads, `unserialize()`) of read-mostly cache entries whose backend bytes this worker already verified (see *Worker memos*) | `0` |
 | `KOH_WORKER_TEMPLATE_PATH_MEMO` | Remember Fluid's file lookups inside code directories per worker (see *Worker memos*) | `0` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
@@ -84,6 +85,7 @@ What a boot produces is either configuration, the same for every request, or req
 | What | Per request | Why |
 |---|---|---|
 | Services in the DI container | `Container::reset()` drops every service instantiated since the boot (Context, PageRenderer, AssetCollector, CacheManager with the runtime cache, the Extbase persistence session, every extension service) and calls `reset()` on `ResetInterface` services; the services that existed after the boot are put back | The boot's own services hold what `ext_localconf.php` registered (renderer, text extractor and meta tag registries, the TCA schema); everything else is request state |
+| Objects kept from the boot | Every property of the kept services, singleton instances and objects in globals goes back to the value it had after the boot (`KeptObjectState`): declared, non-static, non-readonly properties of every class in the hierarchy, uninitialised ones back to uninitialised | Keeping an object keeps what a request writes into it. `MetaTagManagerRegistry` creates its managers on first use and keeps them in the boot's instance; without this, every page carried the description and Open Graph tags of an earlier request, because EXT:seo adds them without replacing |
 | `RequestId`, `RequestClock`, `LogManager` | New instances, as `Bootstrap::init()` creates them | The request id carries the CSP nonce; the clock and the log lines belong to the request |
 | `GeneralUtility` | Container set again, singleton instances back to those after the boot, `getIndpEnv()` memo and class-name cache emptied | `RequestStateReset` empties both after every request |
 | Globals | Restored to their state after the boot (`TYPO3_CONF_VARS`, `TCA`, ...); globals a request added (`TYPO3_REQUEST`, `BE_USER`, `LANG`, `TSFE`, ...) removed | A request may change `TYPO3_CONF_VARS` at runtime |
@@ -99,7 +101,16 @@ A failsafe boot (no usable configuration) is never kept.
 {"koh_worker_leak":"frontend","check":"indpenv_host","expected":"site-b.example","actual":"site-a.example","worker_request":2}
 ```
 
-and the worker ends, so FrankenPHP starts a fresh one for the next request. The guard looks at where a host or language can go wrong; it does not read the page, so wrong content from other state (for example a service that caches a page title) is the reset's job and the worker alternation test's to prove.
+and the worker ends, so FrankenPHP starts a fresh one for the next request. Of the page itself it reads one tag: the `og:url` in the `<head>` of an HTML response with status 200 must name the request's host and page (`og_url_host`, `og_url_path`; a request further below the `og:url`, as a route enhancer produces, is fine, except below the language's root). The meta tags come from `MetaTagManagerRegistry`, and `og:url` is the one of them TYPO3 renders as a link to the page itself, so it is what a meta tag manager carried over from another request gives away. Wrong content from other state (for example a service that caches a page title) is the reset's job and the worker alternation test's to prove.
+
+**Audit.** `KOH_PERSISTENT_BOOTSTRAP_AUDIT=1` (diagnostics, not for production traffic) logs, once per worker, the kept objects and any of them that point to request state (a Context, a request, a site, a site language, a LanguageService, PageRenderer, AssetCollector, a user), and after every request what it changed in kept objects, in objects up to four levels behind them, and in static properties, before the reset undoes it:
+
+```json
+{"koh_worker_kept":49,"observed":120,"request_references":[],"objects":{"service:TYPO3\\CMS\\Core\\MetaTag\\MetaTagManagerRegistry":"TYPO3\\CMS\\Core\\MetaTag\\MetaTagManagerRegistry"}}
+{"koh_worker_drift":1,"objects":[{"label":"service:TYPO3\\CMS\\Core\\MetaTag\\MetaTagManagerRegistry","class":"TYPO3\\CMS\\Core\\MetaTag\\MetaTagManagerRegistry","properties":["instances","managers"]}],"statics":[]}
+```
+
+A kept object's own properties are restored anyway; what the audit is for are the objects behind them and static properties, which nothing restores.
 
 **Static properties are not reset**, in either mode: TYPO3 offers no inventory of what an extension keeps in static properties, and resetting them to their defaults would also drop what is meant to last, such as `ConnectionPool`'s connections. An extension that appends to a static property in a constructor (the worker alternation test's check 5) grows by one piece per request in either mode. `MAX_REQUESTS` bounds that: the worker restarts after that many requests.
 
@@ -339,6 +350,13 @@ and would keep if the bootstrap were shared between requests:
    and a style sheet through AssetCollector, all keyed by page and language.
    The response must contain each exactly once, for its own page, and
    exactly one `<title>`, its own.
+   **The head and the menu:** every page has its own description and Open
+   Graph title and description (EXT:seo, through `MetaTagManagerRegistry`,
+   added without replacing), an `og:url` from `page.meta`, a meta tag of an
+   extension's own meta tag manager registered in `ext_localconf.php`,
+   canonical and hreflang (EXT:seo), JSON-LD with `@id` and `url`, and a main
+   menu with the current page marked. Each must be there exactly once and be
+   this page's, in this language; `html lang` too.
 4. **Language-dependent data loaded in a constructor**, the way glossary
    parsers load their terms: once in a `SingletonInterface` object created
    through `makeInstance()`, once in a shared service of the DI container.

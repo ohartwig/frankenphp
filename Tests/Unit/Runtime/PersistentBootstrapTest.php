@@ -127,4 +127,49 @@ final class PersistentBootstrapTest extends TestCase
         self::assertFalse($container->initialized(\TYPO3\CMS\Core\Cache\CacheManager::class));
         self::assertTrue($container->initialized('boot.registry'));
     }
+
+    /**
+     * What a request writes into an object the boot created is undone
+     * before the next one: the meta tag registry of the boot does not hand
+     * the next page the previous page's description.
+     */
+    #[Test]
+    public function resetUndoesWhatTheRequestWroteIntoKeptObjects(): void
+    {
+        $container = new Container();
+        $registry = new \TYPO3\CMS\Core\MetaTag\MetaTagManagerRegistry();
+        $container->set(\TYPO3\CMS\Core\MetaTag\MetaTagManagerRegistry::class, $registry);
+        $bootstrap = new PersistentBootstrap(audit: false);
+        $bootstrap->record($container);
+        $registry->getManagerForProperty('description')->addProperty('description', 'Start page');
+
+        $bootstrap->resetContainer();
+
+        self::assertSame($registry, $container->get(\TYPO3\CMS\Core\MetaTag\MetaTagManagerRegistry::class));
+        self::assertSame([], $registry->getManagerForProperty('description')->getProperty('description'));
+    }
+
+    #[Test]
+    public function theAuditLogsWhatARequestChangedInKeptObjects(): void
+    {
+        $container = new Container();
+        $registry = new \TYPO3\CMS\Core\MetaTag\MetaTagManagerRegistry();
+        $container->set(\TYPO3\CMS\Core\MetaTag\MetaTagManagerRegistry::class, $registry);
+        $log = tempnam(sys_get_temp_dir(), 'koh-audit');
+        $previous = ini_set('error_log', (string) $log);
+        try {
+            $bootstrap = new PersistentBootstrap(audit: true);
+            $bootstrap->record($container);
+            $registry->getManagerForProperty('description')->addProperty('description', 'Start page');
+            $bootstrap->afterRequest();
+        } finally {
+            ini_set('error_log', $previous === false ? '' : $previous);
+        }
+        $lines = (string) file_get_contents((string) $log);
+        unlink((string) $log);
+
+        self::assertStringContainsString('"koh_worker_kept":1', $lines);
+        self::assertStringContainsString('"koh_worker_drift":1', $lines);
+        self::assertStringContainsString('"properties":["instances","managers"]', $lines);
+    }
 }

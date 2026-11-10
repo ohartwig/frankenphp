@@ -18,6 +18,7 @@ declare(strict_types=1);
  *   DB_REUSE_MAX_REQUESTS     Requests a connection serves at most        (default: 1000)
  *   DB_REUSE_LIVENESS_CHECK   SELECT 1 before reusing a connection        (default: 1)
  *   KOH_PERSISTENT_BOOTSTRAP  Boot TYPO3 once per worker, reset per request (default: 0)
+ *   KOH_PERSISTENT_BOOTSTRAP_AUDIT  Log kept objects and what requests change in them (default: 0)
  */
 
 if (!($_SERVER['FRANKENPHP_WORKER'] ?? false)) {
