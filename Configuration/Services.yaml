@@ -11,6 +11,7 @@ services:
       - '../Classes/Domain/Model/*'
       - '../Classes/Fluid/MemoizingTemplatePaths.php'
       - '../Classes/Fluid/TemplatePathMemo.php'
+      - '../Classes/Http/EarlyHintMemo.php'
       - '../Classes/Message/*'
       - '../Classes/Runtime/*'
 
