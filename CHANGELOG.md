@@ -3,6 +3,16 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.12.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.12.0...v5.12.1) (2026-11-11)
+
+### :bug: Fixes
+
+* **early-hints:** satisfy phpstan (no empty(), nullable oldest key) ([98c1536](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/98c153613fc9be30968fcc7f5b7ebce0d8fa6f73))
+
+### :fast_forward: Performance
+
+* **early-hints:** send the 103 before the render, with the head's stylesheets and fonts ([8a7fb24](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/8a7fb248433ebba66b88f8507f13343517715c92))
+
 ## [5.12.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.11.1...v5.12.0) (2026-11-11)
 
 ### :sparkles: Features
