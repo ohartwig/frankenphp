@@ -3,6 +3,13 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.13.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.12.1...v5.13.0) (2026-11-11)
+
+### :sparkles: Features
+
+* **worker:** keep the CSP and Fluid configuration services in the boot state behind KOH_PERSISTENT_CONFIG_SERVICES ([ea06e70](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/ea06e7030994e25a2329c4941dc4619920122dc6))
+* **page:** resolve the page layout on first use behind KOH_LAZY_PAGE_LAYOUT ([e8a96ca](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/e8a96ca8a3a84023c284c28c18fd12236e1659b5))
+
 ## [5.12.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.12.0...v5.12.1) (2026-11-11)
 
 ### :bug: Fixes
