@@ -50,6 +50,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `KOH_WORKER_CACHE_MEMO` | Skip the HMAC check (and, for object-free payloads, `unserialize()`) of read-mostly cache entries whose backend bytes this worker already verified (see *Worker memos*) | `0` |
 | `KOH_WORKER_TEMPLATE_PATH_MEMO` | Remember Fluid's file lookups inside code directories per worker (see *Worker memos*) | `0` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
+| `KOH_LAZY_PAGE_LAYOUT` | Resolve a page's backend layout from page TSconfig on first use instead of on every frontend request, page cache hits included (see *Lazy page layout*) | `0` |
 
 ### EarlyHintMiddleware
 
@@ -125,6 +126,12 @@ Two switches keep work across requests in a FrankenPHP worker. Both are off by d
 **`KOH_WORKER_TEMPLATE_PATH_MEMO=1`** decorates `ViewFactoryInterface` so that Fluid views resolve their files through `MemoizingTemplatePaths`: sanitised root paths, resolved templates, layouts and partials (including failed lookups), template identifiers and the existence of an explicit template file are remembered per worker, keyed by the full lookup input (root paths, name, format). Only lookups inside the vendor directory and the active packages are kept; anything else (`fileadmin/`, `var/`, paths with `..`) is resolved on every call. Code there changes only with a deployment, which starts new workers; a template edited inside a running worker is not noticed, so keep the switch off for local template work. `open_basedir` is untouched. Bound: `KOH_WORKER_TEMPLATE_PATH_MEMO_MAX_ENTRIES` (default 8192).
 
 The worker alternation test runs once more with both switches on (`test:worker-alternation:memo`).
+
+### Lazy page layout
+
+TYPO3 resolves the backend layout of every frontend page while it builds the page information (`PageInformationFactory`), also when the page cache then answers the request and nothing reads the layout. For a layout from page TSconfig (`pagets__*`) that builds the page's TSconfig, conditions included. With **`KOH_LAZY_PAGE_LAYOUT=1`** the container's `PageLayoutResolver` is `LazyPageLayoutResolver`, which returns a PHP lazy proxy for such a layout: a `PageLayout` that runs TYPO3's own resolution the first time something reads it (PAGEVIEW, `PageContentFetchingProcessor`) and is then exactly what TYPO3 returns. Every other identifier (`default`, `none`, a `backend_layout` record, other data providers) resolves at once, as before. Off, the resolver is TYPO3's unchanged. Needs PHP 8.4 and TYPO3 14; the switch is read per request, in and outside a worker.
+
+One case differs: a `pagets__*` identifier the page TSconfig does not define. TYPO3 then sets no layout (`getPageLayout()` is null); the proxy, already handed out, resolves to a layout with that identifier, an empty title and no content areas, and logs `{"koh_page_layout_missing":"pagets__…","page":<uid>}`. `PageContentFetchingProcessor` treats a missing layout as no content areas anyway; PAGEVIEW passes an empty collection instead of null, so `{content.main}` renders nothing in both cases and only a template that tests `{content}` itself sees a difference. The log line points at the misconfiguration.
 
 ### CacheHashRedirectMiddleware
 
