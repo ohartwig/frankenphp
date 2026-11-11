@@ -156,7 +156,8 @@ class CacheInvalidationListener
      *
      * Only a save processDatamap_afterDatabaseOperations() has seen counts as
      * known. A move, delete, publish or new page arrives here without one and
-     * keeps the siblings.
+     * keeps the siblings -- unless the page TSconfig says that no sibling in
+     * this part of the tree shows the others, see siblingsShowEachOther().
      *
      * @param array<string, mixed> $params
      * @param array<int, true>     $pageIds
@@ -167,7 +168,8 @@ class CacheInvalidationListener
     {
         $pageUid = (int)($params['uid_page'] ?? 0);
         $changed = (self::$changedPageFields[$dataHandler] ?? [])[(int)($params['uid'] ?? 0)] ?? null;
-        if ($changed === null || array_intersect($changed, self::MENU_FIELDS) !== []) {
+        $menusMayChange = $changed === null || array_intersect($changed, self::MENU_FIELDS) !== [];
+        if ($menusMayChange && self::siblingsShowEachOther($params)) {
             return array_keys($pageIds);
         }
 
@@ -178,6 +180,36 @@ class CacheInvalidationListener
         }
 
         return $narrowed;
+    }
+
+    /**
+     * Whether a page's siblings may show it, so that a change to it reaches
+     * them. That is the core's assumption, and the default here.
+     *
+     * A tree of articles is where it is wrong and where it costs most: each
+     * article lists hand-picked related pages, none lists its siblings, and
+     * only the parent's list shows a new or changed one. Publishing one new
+     * article there purged every other article at the edge -- twice, once for
+     * each language. Its page TSconfig can say so:
+     *
+     *     TCEMAIN.edgeCache.purgeSiblings = 0
+     *
+     * and the edge then purges the page and its parent, as for a save that
+     * changed no menu field. The page cache still flushes the siblings; this
+     * only decides what leaves the edge cache. The TSconfig is the one the core
+     * read for this flush, that of the page itself, so a condition on the
+     * parent (`[123 in tree.rootLineParentIds]`) covers the articles without
+     * covering the parent's own siblings.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function siblingsShowEachOther(array $params): bool
+    {
+        $tsConfig = $params['TSConfig'] ?? null;
+        $edgeCache = is_array($tsConfig) ? ($tsConfig['edgeCache.'] ?? null) : null;
+        $value = is_array($edgeCache) ? ($edgeCache['purgeSiblings'] ?? null) : null;
+
+        return !is_scalar($value) || trim((string)$value) !== '0';
     }
 
     /**
