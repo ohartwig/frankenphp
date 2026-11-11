@@ -18,7 +18,19 @@ final class EdgeCacheTagsTest extends TestCase
     protected function tearDown(): void
     {
         putenv(EdgeCacheTags::ENV);
+        unset($GLOBALS['TCA']);
         parent::tearDown();
+    }
+
+    /** @return array<string, mixed> TCA in miniature: two content tables, two backend-only ones */
+    private static function tca(): array
+    {
+        return [
+            'tt_content' => ['ctrl' => ['title' => 'Content']],
+            'tx_news_domain_model_news' => ['ctrl' => []],
+            'tx_scheduler_task' => ['ctrl' => ['adminOnly' => true, 'rootLevel' => 1]],
+            'tx_scheduler_task_group' => ['ctrl' => ['adminOnly' => true, 'rootLevel' => 1]],
+        ];
     }
 
     #[Test]
@@ -82,5 +94,45 @@ final class EdgeCacheTagsTest extends TestCase
     {
         self::assertSame('a, b', EdgeCacheTags::join('', 'a', '', 'b'));
         self::assertSame('', EdgeCacheTags::join(''));
+    }
+
+    /**
+     * A response carries the tags of what it rendered; a backend-only table
+     * (TCA ctrl.adminOnly) renders on no page, so its tags are on none.
+     */
+    #[Test]
+    public function theTagsOfABackendOnlyTableAreNoEdgeTags(): void
+    {
+        $tca = self::tca();
+
+        foreach (['tx_scheduler_task', 'tx_scheduler_task_1', 'tx_scheduler_task_group_3', 'tx_scheduler_task_pid_0'] as $tag) {
+            self::assertFalse(EdgeCacheTags::isEdgeTag($tag, $tca), $tag);
+        }
+        foreach (['pageId_1', 'menuId_7', 'main', 'tt_content', 'tt_content_5', 'tx_news_domain_model_news_pid_12', 'sys_category_3', 'navigation'] as $tag) {
+            self::assertTrue(EdgeCacheTags::isEdgeTag($tag, $tca), $tag);
+        }
+    }
+
+    #[Test]
+    public function withoutTcaEveryTagIsKept(): void
+    {
+        self::assertTrue(EdgeCacheTags::isEdgeTag('tx_scheduler_task_1'));
+        self::assertTrue(EdgeCacheTags::isEdgeTag('tx_scheduler_task_1', []));
+    }
+
+    /**
+     * Header and purge share usable(), so they share the filter: what the
+     * purge leaves out, no response was filed under.
+     */
+    #[Test]
+    public function headerAndPurgeLeaveOutTheSameTags(): void
+    {
+        $GLOBALS['TCA'] = self::tca();
+        $tags = ['pageId_7', 'tx_scheduler_task', 'tt_content_5', 'tx_scheduler_task_1'];
+
+        self::assertSame(['pageId_7', 'tt_content_5'], EdgeCacheTags::usable($tags));
+        self::assertSame([['pageId_7', 'tt_content_5'], 0], EdgeCacheTags::forResponse($tags, 7));
+        self::assertSame(['pageId_7, tt_content_5'], EdgeCacheTags::headerValues($tags));
+        self::assertSame([], EdgeCacheTags::headerValues(['tx_scheduler_task', 'tx_scheduler_task_1']));
     }
 }

@@ -126,7 +126,10 @@ class CacheInvalidationListener
      * With KOH_EDGE_PURGE_BY_TAG on, the same pages are also purged by their
      * pageId_<n> tag, which reaches every URL they render under, and the other
      * tags the core flushed (the record's "<table>_<uid>", a "cachetag:"
-     * command) by theirs. Where edgePagesForPageRecord() leaves the siblings
+     * command) by theirs -- those a response can carry: the tags of a
+     * backend-only table (EdgeCacheTags::isEdgeTag()) are on no response,
+     * and a scheduler task saved after its run, on no page either, sends
+     * nothing at all. Where edgePagesForPageRecord() leaves the siblings
      * out, the record tags of the page go as well: they are what a menu or a
      * link to the page is tagged with, and the save changed nothing those show.
      *

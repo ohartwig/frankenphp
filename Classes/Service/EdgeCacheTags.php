@@ -58,9 +58,11 @@ final class EdgeCacheTags
     }
 
     /**
-     * Tags in the order given, each once, without what Souin cannot file:
+     * Tags in the order given, each once, without what Souin cannot file --
      * anything that is no TYPO3 cache tag (a comma or a space would split
-     * it).
+     * it) -- and without what no response carries, see isEdgeTag(). The
+     * header and the purge both go through here, so a tag the purge leaves
+     * out is one no response was filed under.
      *
      * @param iterable<mixed> $tags
      *
@@ -70,12 +72,57 @@ final class EdgeCacheTags
     {
         $usable = [];
         foreach ($tags as $tag) {
-            if (is_string($tag) && preg_match(self::TAG_PATTERN, $tag) === 1) {
+            if (is_string($tag) && preg_match(self::TAG_PATTERN, $tag) === 1 && self::isEdgeTag($tag)) {
                 $usable[$tag] = true;
             }
         }
 
         return array_map('strval', array_keys($usable));
+    }
+
+    /**
+     * Whether a response can carry this tag in its Surrogate-Key.
+     *
+     * The vocabulary of the header is open: the site identifier, pageId_<n>,
+     * and whatever TYPO3 collected while rendering -- menuId_<n>,
+     * "<table>_<uid>" of every record the content object renderer or
+     * Extbase read, "<table>" and "<table>_pid_<n>" of an Extbase query,
+     * any addPageCacheTags or extension tag. So this names what is out
+     * rather than what is in: the tags of a table whose TCA says
+     * ctrl.adminOnly. TYPO3 marks backend configuration that way (backend
+     * users and groups, file mounts, system news, dashboards, TypoScript
+     * records, scheduler tasks, workspaces); the frontend renders none of
+     * them as content. DataHandler flushes "<table>" and "<table>_<uid>" for
+     * every record it saves, so the scheduler, saving its task records after
+     * each run, had the edge purge tx_scheduler_task and
+     * tx_scheduler_task_<uid> -- tags no response was ever filed under.
+     *
+     * Anything that names no TCA table (pageId_, menuId_, the site
+     * identifier, a custom tag) is kept, and so is everything when TCA is
+     * not loaded.
+     *
+     * @param array<string, mixed>|null $tca TCA to read, $GLOBALS['TCA'] by default
+     */
+    public static function isEdgeTag(string $tag, ?array $tca = null): bool
+    {
+        if (str_starts_with($tag, 'pageId_')) {
+            return true;
+        }
+        $tca ??= is_array($GLOBALS['TCA'] ?? null) ? $GLOBALS['TCA'] : [];
+        $table = null;
+        if (isset($tca[$tag])) {
+            $table = $tag;
+        } elseif (preg_match('/^(.+?)(?:_pid)?_\d+$/', $tag, $matches) === 1 && isset($tca[$matches[1]])) {
+            $table = $matches[1];
+        } elseif (preg_match('/^(.+)_\d+$/', $tag, $matches) === 1 && isset($tca[$matches[1]])) {
+            $table = $matches[1];
+        }
+        if ($table === null) {
+            return true;
+        }
+        $ctrl = is_array($tca[$table]) ? ($tca[$table]['ctrl'] ?? null) : null;
+
+        return !is_array($ctrl) || !(bool)($ctrl['adminOnly'] ?? false);
     }
 
     /**

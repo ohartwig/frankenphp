@@ -1101,4 +1101,34 @@ final class CacheInvalidationListenerTest extends TestCase
         self::assertSame([], $this->purgedTags());
         self::assertSame([], $this->dispatched[0]->tags);
     }
+
+    /**
+     * The scheduler saves its task records after every run, and DataHandler
+     * flushes "tx_scheduler_task" and "tx_scheduler_task_<uid>" for them.
+     * The table is backend-only (TCA ctrl.adminOnly), the record sits on no
+     * page: no response carries those tags, so nothing is sent.
+     */
+    #[Test]
+    public function byTagASchedulerTaskSaveSendsNothing(): void
+    {
+        $this->byTag = true;
+        $GLOBALS['TCA'] = ['tx_scheduler_task' => ['ctrl' => ['adminOnly' => true, 'rootLevel' => 1]], 'tt_content' => ['ctrl' => []]];
+        try {
+            $this->postProc([
+                'table' => 'tx_scheduler_task',
+                'uid' => 1,
+                'uid_page' => 0,
+                'TSConfig' => [],
+                'tags' => ['tx_scheduler_task' => true, 'tx_scheduler_task_1' => true],
+                'clearCacheCommands' => [],
+                'clearCacheEnabled' => true,
+            ]);
+            $this->postProc(['tags' => ['pageId_1' => true, 'tt_content' => true, 'tt_content_5' => true, 'tx_scheduler_task_1' => true]]);
+        } finally {
+            unset($GLOBALS['TCA']);
+        }
+
+        self::assertCount(1, $this->dispatched, 'the scheduler task save dispatched nothing');
+        self::assertSame([['pageId_1', 'tt_content', 'tt_content_5']], $this->purgedTags());
+    }
 }

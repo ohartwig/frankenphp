@@ -194,4 +194,18 @@ final class SurrogateKeyMiddlewareTest extends TestCase
 
         self::assertSame('main', $response->getHeaderLine('Surrogate-Key'));
     }
+
+    /** The same filter as the purge: the tags of a backend-only table stay off the header. */
+    #[Test]
+    public function byTagTheTagsOfABackendOnlyTableStayOff(): void
+    {
+        $GLOBALS['TCA'] = ['tx_scheduler_task' => ['ctrl' => ['adminOnly' => true]], 'tt_content' => ['ctrl' => []]];
+        try {
+            $response = $this->handle($this->renderedPage(42), null, [], true, ['tx_scheduler_task_1', 'tt_content_5', 'menuId_1']);
+        } finally {
+            unset($GLOBALS['TCA']);
+        }
+
+        self::assertSame('main, pageId_42, tt_content_5, menuId_1', $response->getHeaderLine('Surrogate-Key'));
+    }
 }
