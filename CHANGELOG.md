@@ -3,6 +3,12 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.12.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.11.1...v5.12.0) (2026-11-11)
+
+### :sparkles: Features
+
+* **cache:** let page TSconfig keep a page's siblings out of the edge purge ([b898612](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/b89861249aa05e1fdd9879820eb3af16e3587cdf))
+
 ## [5.11.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.11.0...v5.11.1) (2026-11-10)
 
 ### :bug: Fixes
