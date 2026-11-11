@@ -1,0 +1,16 @@
+"pages"
+,"uid","pid","title","slug","doktype","is_siteroot","backend_layout","backend_layout_next_level","TSconfig"
+,1,0,"Root","/",1,1,"pagets__wa","","mod.web_layout.BackendLayouts.wa {
+  title = WA layout
+  config.backend_layout {
+    colCount = 1
+    rowCount = 1
+    rows.1.columns.1 {
+      name = Main
+      colPos = 0
+      identifier = main
+    }
+  }
+}"
+,2,1,"Default layout","/default",1,0,"default","",""
+,3,1,"Undefined layout","/undefined",1,0,"pagets__undefined","",""

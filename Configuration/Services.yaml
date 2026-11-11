@@ -22,6 +22,13 @@ services:
     arguments:
       $inner: '@.inner'
 
+  # KOH_LAZY_PAGE_LAYOUT: a page's backend layout resolved on first use, not
+  # for every request. TYPO3's resolver unchanged while the switch is off; see
+  # LazyPageLayoutResolver.
+  TYPO3\CMS\Core\Page\PageLayoutResolver:
+    class: Koh\FrankenPHP\Page\LazyPageLayoutResolver
+    public: true
+
   Koh\FrankenPHP\EventListener\SystemInformationToolbar:
     tags: { name: event.listener }
 
