@@ -12,7 +12,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 - **103 Early Hints** — real RFC 8297 responses via `headers_send(103)` from the AssetCollector. CSS/JS preloads start in parallel with server-side rendering.
 - **Caddy/Souin cache invalidation** — PURGE through Souin's admin API: by exact URL key, by tag (Surrogate-Key), or everything.
 - **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
-  Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. The extension emits `Surrogate-Key` (site identifier and `pageId_<n>`) on every rendered frontend page through `SurrogateKeyMiddleware`, so tag purges have entries to find; files are served by the web server and carry no key. A tag purge only sends the tags Souin actually holds and logs `no Surrogate-Key emitted for tag` for the rest; "Flush site" in the backend module reports that instead of success. Pages cached before the key was emitted are not reachable by tag until they expire or are flushed completely.
+  Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. The extension emits `Surrogate-Key` on every rendered frontend page through `SurrogateKeyMiddleware`, so tag purges have entries to find: the site identifier, and with `KOH_EDGE_PURGE_BY_TAG=1` the page's TYPO3 cache tags (`pageId_<n>` and the rest; see *Purging by tag*). Without the switch it is the site identifier only on TYPO3 14: the `pageId_<n>` the middleware also meant to add needs page information that TYPO3 14 sets only behind it. Files are served by the web server and carry no key. A tag purge only sends the tags Souin actually holds and logs `no Surrogate-Key emitted for tag` for the rest; "Flush site" in the backend module reports that instead of success. Pages cached before the key was emitted are not reachable by tag until they expire or are flushed completely.
   A saved page or content element purges the URLs of the affected pages in the page's own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place), each by its exact Souin key (`GET-<host>-<path>$`), plus one purge per host for query-string variants (`GET-<host>-/?.+=`). Souin treats a purge key as an unanchored regex and as a prefix, so an unanchored key for `/` empties the whole host. The core flushes every sibling of a saved page; the edge follows only when the save changed a field a menu or teaser shows (title, slug, visibility, position, abstract, media and the like), otherwise it purges the page and its parent (always, where the page TSconfig sets `TCEMAIN.edgeCache.purgeSiblings = 0`). A save in a workspace purges nothing; its publish does.
 - **Backend module** — Admin Tools → manual flushes and cache-key inspection.
 
@@ -53,6 +53,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `KOH_EARLY_HINTS_MEMO` | Send the 103 Early Hints before the render, from what the worker remembers of the page's last render (see *EarlyHintMiddleware*); `0` switches the 103 off | `1` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
 | `KOH_LAZY_PAGE_LAYOUT` | Resolve a page's backend layout from page TSconfig on first use instead of on every frontend request, page cache hits included (see *Lazy page layout*) | `0` |
+| `KOH_EDGE_PURGE_BY_TAG` | Responses carry their TYPO3 cache tags in `Surrogate-Key`, and an editorial change purges the edge by the tags the core flushed, so every URL a page renders under goes, not only its base URL (see *Cache invalidation*, *Purging by tag*). Read where pages are rendered and where editors save | `0` |
 
 ### EarlyHintMiddleware
 
@@ -183,6 +184,16 @@ What a save purges: the URLs of the page in its own site, one per language the p
 ```
 
 A change to a page there purges the page and its parent, whatever changed. The page cache still flushes the siblings; only the edge leaves them. Anything but `0` keeps the siblings. Do not set it where a page shows its siblings (a section menu, previous/next links, a "more in this section" list): those would keep the old title or miss the new page until their edge entry expires.
+
+**Purging by tag.** A page renders under more URLs than the one the router builds for it: pagination and category routes (`/blog/seite/2`, `/blog/kategorie/<slug>`), another page type (`/blog/feed.xml`), plugin detail routes (`/glossar/<term>`), query variants. Each is its own Souin key, and a URL purge reaches none of them; they stayed at the edge until they expired. With **`KOH_EDGE_PURGE_BY_TAG=1`**:
+
+- `SurrogateKeyMiddleware` adds the cache tags TYPO3 collected for the response after the site identifier: the page's own `pageId_<n>` (from the routing result), the other `pageId_<n>` (content from another page, the translation's uid), then the record and plugin tags (`menuId_<n>`, `<table>_<uid>`, `addPageCacheTags`, …), each once, at most 8000 bytes (the limit TYPO3 sets for its own `X-TYPO3-Cache-Tags`). What does not fit is left out from the end, so record tags go before page tags, and logged as `Surrogate-Key truncated`. A typical page carries 40–80 bytes (`main, pageId_12, pageId_13, menuId_1, menuId_7`). A page served from the TYPO3 page cache carries the tags stored with it.
+- An editorial change purges, besides the page URLs, by tag: `pageId_<n>` of every page the URL purge covers, and the other tags the core flushed (`<table>_<uid>`, `menuId_<pid>`, `cachetag:<tag>`). The narrowing above applies: a page save that changed no menu field purges the page and its parent by tag, without the siblings and without the menu and link tags. A menu field change keeps them all, so every page that shows the menu with the old title goes, as in TYPO3's page cache.
+- The host-wide purge of query variants (`GET-<host>-/?.+=`) is not sent: a query variant carries its page's tags.
+- The tags go in one `PURGE {apiEndpoint}` per 8000 bytes of header, without asking Souin first which tags it holds. Souin (v1.7.10) looks a tag up exactly and deletes the keys filed under it, so `pageId_23` does not reach `pageId_2300` or `pageId_230`: checked against the caddy-proxy 4.10.8 image with a lab TYPO3 in front, 2026-11-11.
+- The tags travel in `PurgeEdgeCache`, so the koh_async consumer sends them whatever its own switches say. A message queued by an earlier release (without tags) is handled as before.
+
+Responses cached before the switch carry no page tags; the page URL purges still reach their base URLs, everything else goes when it expires or with one full flush after switching on. The switch is read in two places: where pages are rendered (the header) and where editors save (the purge); set it on both, the frontend first or at the same time.
 
 **Where the purge is sent.** The listener resolves the URLs and dispatches them as one `PurgeEdgeCache` message per hook call; `PurgeEdgeCacheHandler` sends the PURGE requests. By default TYPO3 handles the message in the request, so an editor's save waits for the purges as it always did. With [koh/typo3-async](https://git.ole-hartwig.eu/ai-ready-platform/platform/typo3-async) the message can leave the request and be sent by its consumer instead, when all three hold:
 
@@ -319,6 +330,8 @@ the variable nothing is written.
 ```php
 $this->caddyCacheService->invalidateByTags(['custom:tag', 'product:123']);
 ```
+
+With `KOH_EDGE_PURGE_BY_TAG=1`, a tag added to the page cache (`$request->getAttribute('frontend.cache.collector')->addCacheTags(...)`, `stdWrap.addPageCacheTags`) is on the response as well, and a `cachetag:<tag>` flush reaches the edge. A flush through the `CacheManager` alone (no DataHandler) has no hook and does not.
 
 ### Custom event listeners
 
