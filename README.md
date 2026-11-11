@@ -49,16 +49,22 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `KOH_PERSISTENT_BOOTSTRAP_AUDIT` | Diagnostics for the persistent bootstrap: log the kept objects and what each request changes in them (see *Persistent bootstrap*, *Audit*) | `0` |
 | `KOH_WORKER_CACHE_MEMO` | Skip the HMAC check (and, for object-free payloads, `unserialize()`) of read-mostly cache entries whose backend bytes this worker already verified (see *Worker memos*) | `0` |
 | `KOH_WORKER_TEMPLATE_PATH_MEMO` | Remember Fluid's file lookups inside code directories per worker (see *Worker memos*) | `0` |
+| `KOH_EARLY_HINTS_MEMO` | Send the 103 Early Hints before the render, from what the worker remembers of the page's last render (see *EarlyHintMiddleware*); `0` switches the 103 off | `1` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
 
 ### EarlyHintMiddleware
 
-After `handler->handle()`, the PSR-15 middleware collects the CSS and JS sources registered with the `AssetCollector`, resolves EXT: paths with `PathUtility::getSystemResourceUri()` (TYPO3 v14+ compliant) and sends two hints in parallel:
+The PSR-15 middleware announces the render-critical resources of a page twice:
 
-1. **103 Early Hints** via `headers_send(103)` — as soon as FrankenPHP provides the function (`function_exists()` guard for CLI and test contexts)
-2. **`Link:` header in the 200 response** — as a fallback and for reverse proxies capable of HTTP/2 push
+1. **103 Early Hints** via `headers_send(103)`, **before** TYPO3 renders. What a page needs is only known after its render, so the 103 carries what the last render of the same page (host + path) needed, or, for a page this worker has not rendered yet, what all rendered pages of the host had in common (the base stylesheet and the font, typically). The memory is per FrankenPHP worker (`EarlyHintMemo`, at most `KOH_EARLY_HINTS_MEMO_MAX_ENTRIES` pages, default 1024, oldest forgotten first); a deployment starts new workers and so starts empty. Sent only for document navigations (`Accept: text/html`, `Sec-Fetch-Dest` absent, `document` or `iframe`). `KOH_EARLY_HINTS_MEMO=0` switches the 103 off. Outside a worker (CLI, php-fpm) there is no memory and no 103.
+2. **`Link:` header on the final response** with the full list, which an edge cache keeps with the page.
 
-Both mechanisms deliver preload hints the browser can deduplicate. Pages heavy on CSS/JS get measurably better LCP.
+The list is built after the render from
+
+- the stylesheets of the `AssetCollector`, and its scripts that block the parser — a `defer`, `async` or module script is not preloaded, because a preload fetches it at high priority, ahead of the stylesheets and the LCP image it should wait behind;
+- the `<link rel="stylesheet">` and `<link rel="preload" as="font|image|style|script">` elements of the rendered `<head>` (page.includeCSS and headerData never pass the AssetCollector), same-origin paths only, a stylesheet's `integrity` passed on.
+
+Until 5.11 the 103 went out after the render, together with the final response, and gave the browser no head start; scripts were preloaded whatever their loading mode.
 
 Middleware position: before `typo3/cms-frontend/timetracker` (see `Configuration/RequestMiddlewares.php`).
 
@@ -450,7 +456,7 @@ test fails.
 
 | Symptom | Likely cause |
 |---|---|
-| I don't see the 103 in `curl -v` | The Souin cache swallows the 103 on cache hits. Use `Cache-Control: no-cache` plus a cache buster in the URL. Also, curl < 8.10 silently does not show the 103. |
+| I don't see the 103 in `curl -v` | The Souin cache answers hits itself, without a 103. Use `Cache-Control: no-cache` plus a cache buster in the URL. The request needs `Accept: text/html`, and the worker must have rendered a page of that host once. Also, curl < 8.10 silently does not show the 103. |
 | Browser console `Refused to apply style from 'https://host/EXT:...'` | Before v4.0.3 — EXT: resolution was not implemented. Update to >= v4.0.6. |
 | The cache is not invalidated | Check the Caddy host/port/protocol, enable `enableDebugLogging`, check the logs in `/var/log/typo3` |
 | API calls fail with 401 | Check the API key, allow the `X-API-Key` header in the Caddy config |

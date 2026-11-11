@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Koh\FrankenPHP\Tests\Unit\Middleware;
 
+use Koh\FrankenPHP\Http\EarlyHintMemo;
 use Koh\FrankenPHP\Middleware\EarlyHintMiddleware;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -11,6 +12,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\UriInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use TYPO3\CMS\Core\Http\HtmlResponse;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Http\Uri;
@@ -42,6 +44,17 @@ final class EarlyHintMiddlewareTest extends TestCase
 {
     /** @var list<string> */
     private array $resolved = [];
+
+    protected function setUp(): void
+    {
+        // Outside a worker the memo is off; tests that need it install one.
+        EarlyHintMemo::setInstance(null);
+    }
+
+    protected function tearDown(): void
+    {
+        EarlyHintMemo::setInstance(null, false);
+    }
 
     private function middleware(AssetCollector $collector): EarlyHintMiddleware
     {
@@ -238,5 +251,149 @@ final class EarlyHintMiddlewareTest extends TestCase
 
         self::assertFalse($response->hasHeader('Link'));
         self::assertSame([], $this->resolved);
+    }
+
+    /**
+     * A deferred script waits for the parser anyway. Preloading it would fetch
+     * it at high priority, ahead of what the first paint needs.
+     */
+    #[Test]
+    public function aDeferredOrAsyncScriptIsNotPreloaded(): void
+    {
+        $collector = new AssetCollector();
+        $collector->addJavaScript('d', 'EXT:frankenphp/Resources/Public/JavaScript/d.js', ['defer' => 'defer']);
+        $collector->addJavaScript('a', 'EXT:frankenphp/Resources/Public/JavaScript/a.js', ['async' => 'async']);
+        $collector->addJavaScript('m', 'EXT:frankenphp/Resources/Public/JavaScript/m.js', ['type' => 'module']);
+
+        $response = $this->process($collector);
+
+        self::assertFalse($response->hasHeader('Link'));
+    }
+
+    private function htmlHandler(string $head, string $body = '<p>content</p>'): RequestHandlerInterface
+    {
+        $handler = $this->createStub(RequestHandlerInterface::class);
+        $handler->method('handle')->willReturn(
+            new HtmlResponse('<!DOCTYPE html><html><head>' . $head . '</head><body>' . $body . '</body></html>')
+        );
+
+        return $handler;
+    }
+
+    private function navigation(string $uri = 'https://example.com/a-page'): ServerRequest
+    {
+        return (new ServerRequest($uri, 'GET'))
+            ->withHeader('Accept', 'text/html,application/xhtml+xml')
+            ->withHeader('Sec-Fetch-Dest', 'document');
+    }
+
+    /**
+     * page.includeCSS and headerData never pass the AssetCollector, so the base
+     * stylesheet and the font preload are only found in the rendered head.
+     */
+    #[Test]
+    public function stylesheetsAndPreloadsOfTheRenderedHeadAreAnnounced(): void
+    {
+        $head = '<link rel="stylesheet" href="/_assets/a/Css/base.css?1" media="all" integrity="sha256-abc=">'
+            . '<link rel="preload" as="font" type="font/woff2" crossorigin href="/_assets/a/Fonts/inter.woff2">'
+            . '<link rel="preload" as="image" href="/fileadmin/hero.avif" fetchpriority="high"'
+            . ' imagesrcset="/fileadmin/hero-640.avif 640w, /fileadmin/hero-1280.avif 1280w" imagesizes="100vw">'
+            . '<link rel="stylesheet" href="/_assets/b/cb.css?2">';
+
+        $response = $this->middleware(new AssetCollector())->process($this->navigation(), $this->htmlHandler($head));
+
+        self::assertSame(
+            '</_assets/a/Css/base.css?1>; rel=preload; as=style; integrity="sha256-abc=",'
+            . '</_assets/b/cb.css?2>; rel=preload; as=style,'
+            . '</_assets/a/Fonts/inter.woff2>; rel=preload; as=font; type="font/woff2"; crossorigin,'
+            . '</fileadmin/hero.avif>; rel=preload; as=image; imagesrcset="/fileadmin/hero-640.avif 640w, /fileadmin/hero-1280.avif 1280w"; imagesizes="100vw"; fetchpriority="high"',
+            $response->getHeaderLine('Link'),
+        );
+    }
+
+    /**
+     * A hint is fetched before the page's CSP is known, so only this origin's
+     * own files are announced. A print stylesheet does not block rendering.
+     */
+    #[Test]
+    public function thirdPartyPrintAndOtherLinksOfTheHeadAreLeftOut(): void
+    {
+        $head = '<link rel="stylesheet" href="https://cdn.example.org/x.css">'
+            . '<link rel="stylesheet" href="//cdn.example.org/y.css">'
+            . '<link rel="stylesheet" href="/print.css" media="print">'
+            . '<link rel="preconnect" href="https://cdn.example.org">'
+            . '<link rel="canonical" href="/a-page">'
+            . '<link rel="preload" as="fetch" href="/api">'
+            . '<link rel="stylesheet" href="/bad>.css">';
+
+        $response = $this->middleware(new AssetCollector())->process($this->navigation(), $this->htmlHandler($head));
+
+        self::assertFalse($response->hasHeader('Link'));
+    }
+
+    #[Test]
+    public function linksAfterTheHeadAreNotAnnounced(): void
+    {
+        $response = $this->middleware(new AssetCollector())->process(
+            $this->navigation(),
+            $this->htmlHandler('', '<link rel="stylesheet" href="/late.css">'),
+        );
+
+        self::assertFalse($response->hasHeader('Link'));
+    }
+
+    #[Test]
+    public function theBodyIsStillReadableAfterTheHeadWasScanned(): void
+    {
+        $response = $this->middleware(new AssetCollector())->process(
+            $this->navigation(),
+            $this->htmlHandler('<link rel="stylesheet" href="/a.css">'),
+        );
+
+        self::assertStringStartsWith('<!DOCTYPE html>', $response->getBody()->getContents());
+    }
+
+    #[Test]
+    public function aResponseOtherThanAnHtmlPageIsNotScanned(): void
+    {
+        $handler = $this->createStub(RequestHandlerInterface::class);
+        $handler->method('handle')->willReturn(
+            new HtmlResponse('<head><link rel="stylesheet" href="/a.css"></head>', 404)
+        );
+
+        $response = $this->middleware(new AssetCollector())->process($this->navigation(), $handler);
+
+        self::assertFalse($response->hasHeader('Link'));
+    }
+
+    /**
+     * What the next request of the same page will announce before its render.
+     */
+    #[Test]
+    public function theHintsOfANavigationAreRememberedForTheNextRequest(): void
+    {
+        $memo = new EarlyHintMemo();
+        EarlyHintMemo::setInstance($memo);
+
+        $this->middleware(new AssetCollector())->process(
+            $this->navigation('https://Example.com/a-page?x=1'),
+            $this->htmlHandler('<link rel="stylesheet" href="/a.css">'),
+        );
+
+        self::assertSame(['</a.css>; rel=preload; as=style'], $memo->lookup('example.com', '/a-page'));
+    }
+
+    #[Test]
+    public function aRequestThatIsNotANavigationIsNotRemembered(): void
+    {
+        $memo = new EarlyHintMemo();
+        EarlyHintMemo::setInstance($memo);
+
+        $this->middleware(new AssetCollector())->process(
+            (new ServerRequest('https://example.com/a-page', 'GET'))->withHeader('Accept', 'application/json'),
+            $this->htmlHandler('<link rel="stylesheet" href="/a.css">'),
+        );
+
+        self::assertSame([], $memo->lookup('example.com', '/a-page'));
     }
 }
