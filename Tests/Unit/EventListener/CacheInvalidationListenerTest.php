@@ -411,6 +411,89 @@ final class CacheInvalidationListenerTest extends TestCase
     }
 
     /**
+     * A tree of articles whose pages never list each other says so in its
+     * page TSconfig. Publishing a new article there then purges the article
+     * and the list it appears in, not every other article: on one tree that
+     * was 115 pages in two languages, for each of the publish's runs.
+     */
+    #[Test]
+    public function aNewPageInATreeWhoseSiblingsDoNotListEachOtherPurgesOnlyThePageAndItsParent(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $flush = $this->pageFlush(42);
+        $flush['TSConfig'] = ['edgeCache.' => ['purgeSiblings' => '0']];
+
+        $this->postProc($flush);
+
+        self::assertSame([42, 10], $this->purgedPages());
+    }
+
+    /**
+     * The same holds for a field a menu shows: no sibling shows it.
+     */
+    #[Test]
+    public function aMenuChangeInSuchATreeAlsoLeavesTheSiblingsAlone(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $dataHandler = $this->createStub(DataHandler::class);
+        $flush = $this->pageFlush(42);
+        $flush['TSConfig'] = ['clearCache_pageGrandParent' => '1', 'edgeCache.' => ['purgeSiblings' => 0]];
+
+        $this->save('pages', 42, ['title' => 'x'], $dataHandler);
+        $this->postProc($flush, $dataHandler);
+
+        self::assertSame([42, 10], $this->purgedPages());
+    }
+
+    /**
+     * Anything but an explicit 0 keeps the core's assumption: a typo must
+     * leave a navigation stale nowhere.
+     */
+    #[Test]
+    public function onlyAnExplicitZeroDropsTheSiblings(): void
+    {
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        foreach (['1', '', 'no', ['x' => '0']] as $value) {
+            $this->calls = [];
+            $flush = $this->pageFlush(42);
+            $flush['TSConfig'] = ['edgeCache.' => ['purgeSiblings' => $value]];
+
+            $this->postProc($flush);
+
+            self::assertSame([41, 42, 43, 10], $this->purgedPages(), var_export($value, true));
+        }
+        foreach ([['edgeCache.' => []], ['edgeCache' => '0'], 'garbage'] as $tsConfig) {
+            $this->calls = [];
+            $flush = $this->pageFlush(42);
+            $flush['TSConfig'] = $tsConfig;
+
+            $this->postProc($flush);
+
+            self::assertSame([41, 42, 43, 10], $this->purgedPages(), var_export($tsConfig, true));
+        }
+    }
+
+    /**
+     * The switch is about page records. A content element on a page in such
+     * a tree keeps every page the core tagged.
+     */
+    #[Test]
+    public function theSwitchLeavesContentFlushesAlone(): void
+    {
+        $this->contentPid = 7;
+        $this->postProc([
+            'table' => 'tt_content',
+            'uid' => 99,
+            'uid_page' => 7,
+            'TSConfig' => ['edgeCache.' => ['purgeSiblings' => '0']],
+            'tags' => ['pageId_7' => true, 'pageId_8' => true],
+            'clearCacheEnabled' => true,
+        ]);
+
+        self::assertSame([7, 8], $this->purgedPages());
+    }
+
+    /**
      * A translated page record has its own uid; the core names the default
      * page in uid_page, and that is what has URLs.
      */

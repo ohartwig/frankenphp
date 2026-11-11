@@ -13,7 +13,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 - **Caddy/Souin cache invalidation** — PURGE through Souin's admin API: by exact URL key, by tag (Surrogate-Key), or everything.
 - **PSR-14 event architecture + DataHandler hook** — automatic invalidation on page, content and file changes.
   Deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public URL (and its processed variants) by Souin key on every site host. The extension emits `Surrogate-Key` (site identifier and `pageId_<n>`) on every rendered frontend page through `SurrogateKeyMiddleware`, so tag purges have entries to find; files are served by the web server and carry no key. A tag purge only sends the tags Souin actually holds and logs `no Surrogate-Key emitted for tag` for the rest; "Flush site" in the backend module reports that instead of success. Pages cached before the key was emitted are not reachable by tag until they expire or are flushed completely.
-  A saved page or content element purges the URLs of the affected pages in the page's own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place), each by its exact Souin key (`GET-<host>-<path>$`), plus one purge per host for query-string variants (`GET-<host>-/?.+=`). Souin treats a purge key as an unanchored regex and as a prefix, so an unanchored key for `/` empties the whole host. The core flushes every sibling of a saved page; the edge follows only when the save changed a field a menu or teaser shows (title, slug, visibility, position, abstract, media and the like), otherwise it purges the page and its parent. A save in a workspace purges nothing; its publish does.
+  A saved page or content element purges the URLs of the affected pages in the page's own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place), each by its exact Souin key (`GET-<host>-<path>$`), plus one purge per host for query-string variants (`GET-<host>-/?.+=`). Souin treats a purge key as an unanchored regex and as a prefix, so an unanchored key for `/` empties the whole host. The core flushes every sibling of a saved page; the edge follows only when the save changed a field a menu or teaser shows (title, slug, visibility, position, abstract, media and the like), otherwise it purges the page and its parent (always, where the page TSconfig sets `TCEMAIN.edgeCache.purgeSiblings = 0`). A save in a workspace purges nothing; its publish does.
 - **Backend module** — Admin Tools → manual flushes and cache-key inspection.
 
 ## Components
@@ -156,6 +156,17 @@ Automatic invalidation via:
 - **`FileCacheInvalidationListener`** — deleting, replacing, renaming, moving or rewriting a fileadmin file purges its public path and processed variants on every site host
 
 What a save purges: the URLs of the page in its own site, one per language the page exists in (hidden and just-deleted pages included, never the site base in their place); the core's siblings only when a menu or teaser field changed (title, slug, visibility, position, abstract, media and the like), otherwise the page and its parent; nothing for a save in a workspace (its publish purges); each page once per DataHandler run.
+
+**Trees whose pages do not list each other.** A move, delete, publish or new page keeps the core's siblings, because nothing says which fields changed. In a tree of articles that is every other article for each new one, in every language, although each article lists hand-picked related pages and only the parent's list shows the new one. The page TSconfig of such a tree can switch the siblings off at the edge:
+
+```typoscript
+# The articles below page 123; a condition on the parent leaves page 123's own siblings as they are.
+[123 in tree.rootLineParentIds]
+    TCEMAIN.edgeCache.purgeSiblings = 0
+[END]
+```
+
+A change to a page there purges the page and its parent, whatever changed. The page cache still flushes the siblings; only the edge leaves them. Anything but `0` keeps the siblings. Do not set it where a page shows its siblings (a section menu, previous/next links, a "more in this section" list): those would keep the old title or miss the new page until their edge entry expires.
 
 **Where the purge is sent.** The listener resolves the URLs and dispatches them as one `PurgeEdgeCache` message per hook call; `PurgeEdgeCacheHandler` sends the PURGE requests. By default TYPO3 handles the message in the request, so an editor's save waits for the purges as it always did. With [koh/typo3-async](https://git.ole-hartwig.eu/ai-ready-platform/platform/typo3-async) the message can leave the request and be sent by its consumer instead, when all three hold:
 
