@@ -161,7 +161,7 @@ class EarlyHintMiddleware implements MiddlewareInterface
 
         foreach ($this->assetCollector->getJavaScripts() as $script) {
             $attributes = (array) ($script['attributes'] ?? []);
-            if (!empty($attributes['defer']) || !empty($attributes['async'])
+            if ($this->isSet($attributes, 'defer') || $this->isSet($attributes, 'async')
                 || 'module' === ($attributes['type'] ?? '')
             ) {
                 continue;
@@ -174,6 +174,19 @@ class EarlyHintMiddleware implements MiddlewareInterface
         }
 
         return $links;
+    }
+
+    /**
+     * A boolean script attribute as the AssetCollector holds it: `true`,
+     * `'defer'`, `'1'`; absent, `false`, `''` and `'0'` mean not set.
+     *
+     * @param array<mixed> $attributes
+     */
+    private function isSet(array $attributes, string $name): bool
+    {
+        $value = $attributes[$name] ?? false;
+
+        return true === $value || (\is_string($value) && '' !== $value && '0' !== $value) || (\is_int($value) && 0 !== $value);
     }
 
     /**

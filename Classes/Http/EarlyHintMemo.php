@@ -99,8 +99,9 @@ final class EarlyHintMemo
         $key = $host . $path;
 
         unset($this->pages[$key]);
-        if (count($this->pages) >= $this->maxEntries) {
-            unset($this->pages[array_key_first($this->pages)]);
+        $oldest = array_key_first($this->pages);
+        if (null !== $oldest && count($this->pages) >= $this->maxEntries) {
+            unset($this->pages[$oldest]);
         }
         $this->pages[$key] = $links;
 
