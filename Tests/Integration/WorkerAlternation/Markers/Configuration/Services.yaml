@@ -16,6 +16,9 @@ services:
   Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\LateStateMiddleware:
     public: true
 
+  Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\ConfigServiceMutator:
+    public: true
+
   # Instantiated per submission by the form framework (finishersDefinition).
   Koh\FrankenPHP\Tests\Integration\WorkerAlternation\Markers\Finishers\RecordRequestFinisher:
     public: true

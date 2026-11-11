@@ -1,0 +1,9 @@
+# This site's own policy: the runner expects https://site-b.example in the
+# Content-Security-Policy header of every site B page and of no other.
+enforce:
+  inheritDefault: true
+  mutations:
+    - mode: extend
+      directive: img-src
+      sources:
+        - 'https://site-b.example'

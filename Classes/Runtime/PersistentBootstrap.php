@@ -151,6 +151,12 @@ final class PersistentBootstrap
     /** Whether to log what requests change in kept objects (AUDIT_ENV). */
     private bool $audit;
 
+    /** Whether the boot builds and keeps the configuration services (KeptConfigurationServices::ENV). */
+    private bool $keepConfigServices;
+
+    /** The kept configuration services, checked and put back before each request. */
+    private ?KeptConfigurationServices $configServices = null;
+
     /** Audit only: the kept objects and what they point to, compared after each request. */
     private ?KeptObjectState $auditState = null;
 
@@ -170,10 +176,12 @@ final class PersistentBootstrap
     /**
      * @param (\Closure(ClassLoader): ContainerInterface)|null $boot               for tests: instead of SystemEnvironmentBuilder::run() and Bootstrap::init()
      * @param (\Closure(): void)|null                          $refreshEnvironment for tests: instead of what is set up again per request (time globals, error handling, time zone)
+     * @param bool|null                                        $keepConfigServices for tests: instead of KOH_PERSISTENT_CONFIG_SERVICES
      */
-    public function __construct(?\Closure $boot = null, ?\Closure $refreshEnvironment = null, ?bool $audit = null)
+    public function __construct(?\Closure $boot = null, ?\Closure $refreshEnvironment = null, ?bool $audit = null, ?bool $keepConfigServices = null)
     {
         $this->audit = $audit ?? WorkerSwitch::isOn(self::AUDIT_ENV);
+        $this->keepConfigServices = $keepConfigServices ?? KeptConfigurationServices::isEnabled();
         $this->boot = $boot ?? static function (ClassLoader $classLoader): ContainerInterface {
             SystemEnvironmentBuilder::run(0, SystemEnvironmentBuilder::REQUESTTYPE_FE);
 
@@ -281,6 +289,10 @@ final class PersistentBootstrap
      */
     public function record(Container $container): void
     {
+        if ($this->keepConfigServices) {
+            // Built now, they are part of the boot state recorded below.
+            KeptConfigurationServices::instantiate($container);
+        }
         [$this->bootServices, $this->bootPrivates] = \Closure::bind(
             fn(): array => [$this->services, $this->privates],
             $container,
@@ -299,6 +311,7 @@ final class PersistentBootstrap
             $this->bootGlobals = array_intersect_key($this->bootGlobals, $this->firstBootGlobals);
         }
         $this->keptState = KeptObjectState::capture($this->keptObjects(), [ClassLoader::class]);
+        $this->configServices = $this->keepConfigServices ? KeptConfigurationServices::capture($container) : null;
         $this->container = $container;
         if ($this->audit) {
             $this->auditState = KeptObjectState::capture($this->keptObjects(), [ClassLoader::class], self::AUDIT_DEPTH);
@@ -363,6 +376,12 @@ final class PersistentBootstrap
         // What the request wrote into kept objects: undone, so the next one
         // finds them as a fresh boot would leave them.
         $this->keptState?->restore();
+        // The configuration services hold state KeptObjectState cannot put
+        // back; a request that changed them is reported.
+        $drift = $this->configServices?->verify() ?? [];
+        if ($drift !== []) {
+            error_log((string) json_encode(['koh_worker_drift' => count($drift), 'objects' => $drift, 'statics' => [], 'restored' => true], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+        }
     }
 
     private function prepareRequest(Container $container): void
