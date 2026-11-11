@@ -3,6 +3,12 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.14.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.13.0...v5.14.0) (2026-11-11)
+
+### :sparkles: Features
+
+* **cache:** purge the edge by surrogate key behind KOH_EDGE_PURGE_BY_TAG ([846183c](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/846183ccb6ffbcf6db5bf72066a9a9a7036dedda))
+
 ## [5.13.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.12.1...v5.13.0) (2026-11-11)
 
 ### :sparkles: Features
