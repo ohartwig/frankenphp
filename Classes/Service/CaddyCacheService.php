@@ -256,6 +256,27 @@ class CaddyCacheService
     }
 
     /**
+     * Purge by Surrogate-Key without asking Souin first which tags it holds:
+     * the edge purge after an editorial change (KOH_EDGE_PURGE_BY_TAG). Most
+     * of the tags the core flushes for a save were never emitted by any cached
+     * response, and listing every tag with all its keys on each save would
+     * cost more than the purge; a tag Souin does not hold is a no-op there.
+     *
+     * Souin looks a tag up exactly, so pageId_1 does not reach pageId_12.
+     * The tags go out in as few requests as fit the header limit, see
+     * EdgeCacheTags::headerValues().
+     *
+     * @param list<string> $tags
+     */
+    public function invalidateSurrogateKeys(array $tags): void
+    {
+        $target = rtrim($this->buildApiUrl(), '/');
+        foreach (EdgeCacheTags::headerValues($tags) as $value) {
+            $this->purgeViaApi($target, explode(', ', $value), 'tags');
+        }
+    }
+
+    /**
      * Tags Souin holds entries for, without its "SURROGATE_" storage prefix.
      * Null when the admin API could not be read at all.
      *

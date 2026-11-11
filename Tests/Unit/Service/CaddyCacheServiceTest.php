@@ -345,6 +345,73 @@ final class CaddyCacheServiceTest extends TestCase
     }
 
     /**
+     * The edge purge after a save (KOH_EDGE_PURGE_BY_TAG) sends its tags
+     * without reading Souin's tag list first: one PURGE on the API base path,
+     * the tags in the Surrogate-Key header.
+     */
+    #[Test]
+    public function surrogateKeysArePurgedWithoutAskingSouinFirst(): void
+    {
+        $this->response = (new Response())->withStatus(204);
+
+        $this->service([], $this->site('main', 'https://www.example.org/'))
+            ->invalidateSurrogateKeys(['pageId_2300', 'tt_content_5']);
+
+        self::assertCount(1, $this->sent);
+        self::assertSame('PURGE', $this->sent[0]->getMethod());
+        self::assertSame('http://localhost:2019/souin-api/souin', (string)$this->sent[0]->getUri());
+        self::assertSame('pageId_2300, tt_content_5', $this->sent[0]->getHeaderLine('Surrogate-Key'));
+    }
+
+    /**
+     * caddy-proxy takes 16 KB of request headers; a publish of a large tree
+     * flushes more tags than one header holds, so they are split.
+     */
+    #[Test]
+    public function manySurrogateKeysAreSplitIntoSeveralPurges(): void
+    {
+        $this->response = (new Response())->withStatus(204);
+        $tags = array_map(static fn (int $i): string => 'pageId_' . $i, range(1, 1500));
+
+        $this->service([], $this->site('main', 'https://www.example.org/'))->invalidateSurrogateKeys($tags);
+
+        self::assertGreaterThan(1, count($this->sent));
+        $sent = [];
+        foreach ($this->sent as $request) {
+            self::assertLessThanOrEqual(8000, strlen($request->getHeaderLine('Surrogate-Key')));
+            $sent = [...$sent, ...explode(', ', $request->getHeaderLine('Surrogate-Key'))];
+        }
+        self::assertSame($tags, $sent);
+    }
+
+    #[Test]
+    public function noSurrogateKeysNoPurge(): void
+    {
+        $this->service([], $this->site('main', 'https://www.example.org/'))->invalidateSurrogateKeys([]);
+
+        self::assertSame([], $this->sent);
+    }
+
+    #[Test]
+    public function surrogateKeysAreNotSentWhenDisabled(): void
+    {
+        $this->service(['enabled' => '0'], $this->site('main', 'https://www.example.org/'))->invalidateSurrogateKeys(['pageId_1']);
+
+        self::assertSame([], $this->sent);
+    }
+
+    #[Test]
+    public function theSurrogateKeyPurgeUsesTheConfiguredHeader(): void
+    {
+        $this->response = (new Response())->withStatus(204);
+
+        $this->service(['cacheTagsHeader' => 'Cache-Tags'], $this->site('main', 'https://www.example.org/'))
+            ->invalidateSurrogateKeys(['pageId_1']);
+
+        self::assertSame('pageId_1', $this->sent[0]->getHeaderLine('Cache-Tags'));
+    }
+
+    /**
      * AUD-062 F01 step 2: Souin answers 204 to a tag nothing was stored under. That
      * used to read as a purge; now the tag is reported as never emitted.
      */

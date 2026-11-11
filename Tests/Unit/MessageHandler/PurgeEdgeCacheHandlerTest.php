@@ -42,6 +42,9 @@ final class PurgeEdgeCacheHandlerTest extends TestCase
         $service->method('invalidateQueryVariants')->willReturnCallback(function (array $urls): void {
             $this->calls[] = ['invalidateQueryVariants', $urls, null];
         });
+        $service->method('invalidateSurrogateKeys')->willReturnCallback(function (array $tags): void {
+            $this->calls[] = ['invalidateSurrogateKeys', $tags, null];
+        });
 
         return new PurgeEdgeCacheHandler($service);
     }
@@ -65,6 +68,44 @@ final class PurgeEdgeCacheHandlerTest extends TestCase
     public function noQueryVariantsNoVariantPurge(): void
     {
         ($this->handler())(new PurgeEdgeCache([['https://a.example/y']]));
+
+        self::assertSame([['invalidateUrls', ['https://a.example/y'], false]], $this->calls);
+    }
+
+    #[Test]
+    public function theTagsArePurgedAfterTheUrls(): void
+    {
+        ($this->handler())(new PurgeEdgeCache([['https://a.example/y']], [], null, ['pageId_12', 'tt_content_5']));
+
+        self::assertSame([
+            ['invalidateUrls', ['https://a.example/y'], false],
+            ['invalidateSurrogateKeys', ['pageId_12', 'tt_content_5'], null],
+        ], $this->calls);
+    }
+
+    #[Test]
+    public function aTagOnlyMessagePurgesTheTags(): void
+    {
+        ($this->handler())(new PurgeEdgeCache([], [], null, ['tx_news']));
+
+        self::assertSame([['invalidateSurrogateKeys', ['tx_news'], null]], $this->calls);
+    }
+
+    /**
+     * A message queued by a release without tags decodes with the property
+     * uninitialised; the consumer of the new release must handle it as
+     * before instead of failing the row.
+     */
+    #[Test]
+    public function aMessageQueuedWithoutTagsIsStillHandled(): void
+    {
+        $serialized = serialize(new PurgeEdgeCache([['https://a.example/y']]));
+        $old = (string)preg_replace(['/^(O:\d+:"[^"]+"):4:/', '/s:4:"tags";a:0:\{\}/'], ['$1:3:', ''], $serialized);
+        self::assertStringNotContainsString('"tags"', $old);
+        $message = unserialize($old, ['allowed_classes' => [PurgeEdgeCache::class]]);
+        self::assertInstanceOf(PurgeEdgeCache::class, $message);
+
+        ($this->handler())($message);
 
         self::assertSame([['invalidateUrls', ['https://a.example/y'], false]], $this->calls);
     }

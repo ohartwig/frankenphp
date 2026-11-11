@@ -22,6 +22,7 @@ final class PurgeEdgeCacheTest extends TestCase
             [['https://a.example/x', 'https://b.example/x'], ['https://a.example/y']],
             ['https://a.example/x'],
             ['sapi' => 'frankenphp', 'be_user' => 'editor', 'workspace' => 0, 'caller' => ['A::b']],
+            ['pageId_12', 'tt_content_5'],
         );
         $serialized = serialize($message);
 
@@ -31,11 +32,12 @@ final class PurgeEdgeCacheTest extends TestCase
     }
 
     #[Test]
-    public function variantsAndOriginAreOptional(): void
+    public function variantsOriginAndTagsAreOptional(): void
     {
         $message = new PurgeEdgeCache([['https://a.example/x']]);
 
         self::assertSame([], $message->queryVariantUrls);
         self::assertNull($message->origin);
+        self::assertSame([], $message->tags);
     }
 }

@@ -12,7 +12,10 @@ use Symfony\Component\Messenger\Attribute\AsMessageHandler;
 /**
  * Sends the purges a PurgeEdgeCache carries, exactly as the listener sent
  * them inline before: each page's URLs without their query variants, then
- * the query variants once per host.
+ * the query variants once per host, then its Surrogate-Keys.
+ *
+ * A message queued by a release without tags has the property uninitialised
+ * after decoding, and reading it would throw; it is read as none.
  *
  * A failed PURGE is logged by CaddyCacheService and not thrown, as it was in
  * the request; what does throw is left to the messenger (retry and failure
@@ -32,6 +35,18 @@ final readonly class PurgeEdgeCacheHandler
             if ($message->queryVariantUrls !== []) {
                 $this->caddyCacheService->invalidateQueryVariants($message->queryVariantUrls);
             }
+            $tags = self::tagsOf($message);
+            if ($tags !== []) {
+                $this->caddyCacheService->invalidateSurrogateKeys($tags);
+            }
         });
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function tagsOf(PurgeEdgeCache $message): array
+    {
+        return (new \ReflectionProperty($message, 'tags'))->isInitialized($message) ? $message->tags : [];
     }
 }

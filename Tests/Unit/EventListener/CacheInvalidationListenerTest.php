@@ -63,6 +63,9 @@ final class CacheInvalidationListenerTest extends TestCase
     /** Whether the bus double hands a message to the handler, like TYPO3's synchronous default routing. */
     private bool $handleInline = true;
 
+    /** KOH_EDGE_PURGE_BY_TAG as the listener sees it. */
+    private bool $byTag = false;
+
     private function listener(): CacheInvalidationListener
     {
         $service = $this->createStub(CaddyCacheService::class);
@@ -99,12 +102,18 @@ final class CacheInvalidationListenerTest extends TestCase
                 $this->calls[] = ['method' => 'invalidateAllSites', 'argument' => null];
             }
         );
+        $service->method('invalidateSurrogateKeys')->willReturnCallback(
+            function (array $tags): void {
+                $this->calls[] = ['method' => 'invalidateSurrogateKeys', 'argument' => $tags];
+            }
+        );
 
         return new CacheInvalidationListener(
             $service,
             new NullLogger(),
             $this->pool(),
             $this->bus(new PurgeEdgeCacheHandler($service)),
+            $this->byTag,
         );
     }
 
@@ -930,5 +939,166 @@ final class CacheInvalidationListenerTest extends TestCase
         self::assertCount(1, $lines);
         self::assertArrayNotHasKey('handled_by', $lines[0]);
         self::assertSame(CacheInvalidationListener::class . '::purgePages', $lines[0]['caller'][0]);
+    }
+
+    // --- purging by tag (KOH_EDGE_PURGE_BY_TAG) -------------------------------
+
+    /** @return list<list<string>> the Surrogate-Key purges, in order */
+    private function purgedTags(): array
+    {
+        return array_values(array_map(
+            static fn (array $call): array => $call['argument'],
+            array_filter($this->calls, static fn (array $call): bool => $call['method'] === 'invalidateSurrogateKeys'),
+        ));
+    }
+
+    /**
+     * A content save reaches every URL the page renders under -- pagination,
+     * a feed, plugin detail routes -- through the page's tag, and the record
+     * tags the core flushed with it. The page URLs are still purged: what was
+     * cached before the switch carries no page tag.
+     */
+    #[Test]
+    public function byTagAContentFlushPurgesThePageTagAndTheRecordTags(): void
+    {
+        $this->byTag = true;
+
+        $this->postProc([
+            'table' => 'tt_content',
+            'uid' => 5,
+            'uid_page' => 1,
+            'TSConfig' => [],
+            'tags' => ['pageId_1' => true, 'tt_content' => true, 'tt_content_5' => true],
+            'clearCacheCommands' => [],
+            'clearCacheEnabled' => true,
+        ]);
+
+        self::assertSame([['pageId_1', 'tt_content', 'tt_content_5']], $this->purgedTags());
+        self::assertSame([1], $this->purgedPages());
+        self::assertContains('invalidateUrls', $this->methods());
+    }
+
+    /**
+     * The host-wide purge of query variants took every other page's variants
+     * with it. Under the switch a variant goes with its page's tag instead.
+     */
+    #[Test]
+    public function byTagNoHostWideQueryVariantPurge(): void
+    {
+        $this->byTag = true;
+
+        $this->postProc(['tags' => ['pageId_501' => true]]);
+
+        self::assertSame([], $this->queryVariantCalls);
+        self::assertSame([['pageId_501']], $this->purgedTags());
+    }
+
+    /**
+     * The narrowing holds for tags: a save that changed no menu field purges
+     * the page and its parent by tag, and neither the siblings nor the
+     * record tags ("pages", "pages_<uid>", "menuId_<pid>") a menu or a link
+     * to the page is tagged with.
+     */
+    #[Test]
+    public function byTagANarrowedPageSaveLeavesSiblingsAndMenuTagsAlone(): void
+    {
+        $this->byTag = true;
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $dataHandler = $this->createStub(DataHandler::class);
+        $flush = $this->pageFlush(42);
+        $flush['tags'] += ['pages_42' => true, 'menuId_10' => true];
+
+        $this->save('pages', 42, ['description' => 'x'], $dataHandler);
+        $this->postProc($flush, $dataHandler);
+
+        self::assertSame([['pageId_42'], ['pageId_10']], $this->purgedTags());
+    }
+
+    /**
+     * A menu field change keeps everything the core flushed, menu tags
+     * included: every page that shows the menu shows the new title.
+     */
+    #[Test]
+    public function byTagAMenuChangePurgesEverythingTheCoreFlushed(): void
+    {
+        $this->byTag = true;
+        $this->pageRow = ['pid' => 10, 'l10n_parent' => 0];
+        $dataHandler = $this->createStub(DataHandler::class);
+        $flush = $this->pageFlush(42);
+        $flush['tags'] += ['menuId_10' => true];
+
+        $this->save('pages', 42, ['title' => 'x'], $dataHandler);
+        $this->postProc($flush, $dataHandler);
+
+        self::assertSame([['pageId_42'], ['pageId_41', 'pageId_43', 'pageId_10', 'pages', 'menuId_10']], $this->purgedTags());
+    }
+
+    /**
+     * "cachetag:<tag>" flushes a tag no page id stands for; by tag it reaches
+     * the edge, which it never did by URL.
+     */
+    #[Test]
+    public function byTagACacheTagCommandIsPurged(): void
+    {
+        $this->byTag = true;
+
+        $this->postProc(['cacheCmd' => 'cachetag:tx_news', 'tags' => ['tx_news']]);
+
+        self::assertSame([['tx_news']], $this->purgedTags());
+        self::assertSame([], $this->purgedPages());
+    }
+
+    #[Test]
+    public function byTagEachTagOncePerDataHandlerRun(): void
+    {
+        $this->byTag = true;
+        $dataHandler = $this->createStub(DataHandler::class);
+
+        $this->postProc(['tags' => ['pageId_12' => true, 'tt_content_5' => true]], $dataHandler);
+        $this->postProc(['tags' => ['pageId_12' => true, 'tt_content_5' => true, 'tt_content_6' => true]], $dataHandler);
+
+        self::assertSame([['pageId_12', 'tt_content_5'], ['tt_content_6']], $this->purgedTags());
+    }
+
+    /**
+     * A tag that would split in Souin's header (a comma or a space) is no
+     * TYPO3 cache tag and is not sent.
+     */
+    #[Test]
+    public function byTagOnlyValidCacheTagsAreSent(): void
+    {
+        $this->byTag = true;
+
+        $this->postProc(['tags' => ['pageId_12' => true, 'a, b' => true, 'c d' => true]]);
+
+        self::assertSame([['pageId_12']], $this->purgedTags());
+    }
+
+    /**
+     * The tags travel in the message, so the koh_async consumer sends them
+     * whatever its own environment says.
+     */
+    #[Test]
+    public function byTagTheMessageCarriesTheTags(): void
+    {
+        $this->byTag = true;
+        $this->handleInline = false;
+
+        $this->postProc(['tags' => ['pageId_501' => true, 'tt_content_5' => true]]);
+
+        self::assertCount(1, $this->dispatched);
+        self::assertSame(['pageId_501', 'tt_content_5'], $this->dispatched[0]->tags);
+        self::assertSame([], $this->dispatched[0]->queryVariantUrls);
+        self::assertSame([], $this->purgedTags(), 'nothing sent in the request');
+    }
+
+    #[Test]
+    public function withoutTheSwitchNoTagIsPurged(): void
+    {
+        $this->postProc(['cacheCmd' => 'cachetag:tx_news', 'tags' => ['tx_news']]);
+        $this->postProc(['tags' => ['pageId_12' => true, 'tt_content_5' => true]]);
+
+        self::assertSame([], $this->purgedTags());
+        self::assertSame([], $this->dispatched[0]->tags);
     }
 }

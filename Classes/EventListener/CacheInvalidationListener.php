@@ -12,6 +12,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\DataHandling\DataHandler;
 use Koh\FrankenPHP\Message\PurgeEdgeCache;
 use Koh\FrankenPHP\Service\CaddyCacheService;
+use Koh\FrankenPHP\Service\EdgeCacheTags;
 use Koh\FrankenPHP\Service\PurgeAudit;
 
 class CacheInvalidationListener
@@ -30,6 +31,13 @@ class CacheInvalidationListener
      * @var \WeakMap<DataHandler, array<string, true>>|null
      */
     private static ?\WeakMap $queryVariantHostsPerDataHandler = null;
+
+    /**
+     * Surrogate-Keys already purged for a DataHandler run (KOH_EDGE_PURGE_BY_TAG).
+     *
+     * @var \WeakMap<DataHandler, array<string, true>>|null
+     */
+    private static ?\WeakMap $purgedTagsPerDataHandler = null;
 
     /**
      * Fields each page record changed in a DataHandler run, by uid. See
@@ -56,7 +64,17 @@ class CacheInvalidationListener
         private readonly LoggerInterface $logger,
         private readonly ConnectionPool $connectionPool,
         private readonly MessageBusInterface $messageBus,
+        private readonly ?bool $purgeByTag = null,
     ) {}
+
+    /**
+     * KOH_EDGE_PURGE_BY_TAG, read where the editor saves: the purge carries
+     * its tags, so the consumer that sends it needs no switch of its own.
+     */
+    private function purgesByTag(): bool
+    {
+        return $this->purgeByTag ?? EdgeCacheTags::enabled();
+    }
 
     /**
      * Handle general cache flush events
@@ -105,6 +123,13 @@ class CacheInvalidationListener
      * Everything else purges the URLs of the tagged pages, with one exception:
      * see edgePagesForPageRecord().
      *
+     * With KOH_EDGE_PURGE_BY_TAG on, the same pages are also purged by their
+     * pageId_<n> tag, which reaches every URL they render under, and the other
+     * tags the core flushed (the record's "<table>_<uid>", a "cachetag:"
+     * command) by theirs. Where edgePagesForPageRecord() leaves the siblings
+     * out, the record tags of the page go as well: they are what a menu or a
+     * link to the page is tagged with, and the save changed nothing those show.
+     *
      * @param array<string, mixed> $params
      */
     public function clearCachePostProc(array $params, DataHandler $dataHandler): void
@@ -127,10 +152,13 @@ class CacheInvalidationListener
         }
 
         $pageIds = [];
+        $otherTags = [];
         foreach ((array)($params['tags'] ?? []) as $key => $value) {
             $tag = is_string($key) ? $key : (string)$value;
             if (preg_match('/^pageId_(\d+)$/', $tag, $matches) === 1) {
                 $pageIds[(int)$matches[1]] = true;
+            } else {
+                $otherTags[] = $tag;
             }
         }
         if (isset($params['uid_page']) && (int)$params['uid_page'] > 0) {
@@ -138,12 +166,13 @@ class CacheInvalidationListener
         }
 
         if (($params['table'] ?? null) === 'pages') {
-            $this->purgePages($this->edgePagesForPageRecord($params, $pageIds, $dataHandler), $dataHandler);
+            [$edgePages, $narrowed] = $this->edgePagesForPageRecord($params, $pageIds, $dataHandler);
+            $this->purgePages($edgePages, $dataHandler, $narrowed ? [] : $otherTags);
 
             return;
         }
 
-        $this->purgePages(array_keys($pageIds), $dataHandler);
+        $this->purgePages(array_keys($pageIds), $dataHandler, $otherTags);
     }
 
     /**
@@ -162,7 +191,7 @@ class CacheInvalidationListener
      * @param array<string, mixed> $params
      * @param array<int, true>     $pageIds
      *
-     * @return list<int>
+     * @return array{list<int>, bool} the pages, and whether the siblings were left out
      */
     private function edgePagesForPageRecord(array $params, array $pageIds, DataHandler $dataHandler): array
     {
@@ -170,7 +199,7 @@ class CacheInvalidationListener
         $changed = (self::$changedPageFields[$dataHandler] ?? [])[(int)($params['uid'] ?? 0)] ?? null;
         $menusMayChange = $changed === null || array_intersect($changed, self::MENU_FIELDS) !== [];
         if ($menusMayChange && self::siblingsShowEachOther($params)) {
-            return array_keys($pageIds);
+            return [array_keys($pageIds), false];
         }
 
         $narrowed = [$pageUid];
@@ -179,7 +208,7 @@ class CacheInvalidationListener
             $narrowed[] = $parent;
         }
 
-        return $narrowed;
+        return [$narrowed, true];
     }
 
     /**
@@ -225,29 +254,48 @@ class CacheInvalidationListener
      * koh/typo3-async consumer; the URLs are resolved here either way, while
      * the DataHandler's view of the pages is current.
      *
-     * @param list<int> $pageIds
+     * Purging by tag (KOH_EDGE_PURGE_BY_TAG), the message also carries the
+     * pageId_<n> of each page and $otherTags, each once per run. The page URLs
+     * stay: they reach what was cached before the switch, which carries no
+     * page tag. The host-wide purge of query-string variants does not: a
+     * query variant of a page carries the page's tag, and that purge took the
+     * variants of every other page on the host with it.
+     *
+     * @param list<int>    $pageIds
+     * @param list<string> $otherTags
      */
-    private function purgePages(array $pageIds, DataHandler $dataHandler): void
+    private function purgePages(array $pageIds, DataHandler $dataHandler, array $otherTags = []): void
     {
         self::$purgedPerDataHandler ??= new \WeakMap();
         self::$queryVariantHostsPerDataHandler ??= new \WeakMap();
+        self::$purgedTagsPerDataHandler ??= new \WeakMap();
         /** @var array<int, true> $done */
         $done = self::$purgedPerDataHandler[$dataHandler] ?? [];
         /** @var array<string, true> $hostsDone */
         $hostsDone = self::$queryVariantHostsPerDataHandler[$dataHandler] ?? [];
+        /** @var array<string, true> $tagsDone */
+        $tagsDone = self::$purgedTagsPerDataHandler[$dataHandler] ?? [];
+        $byTag = $this->purgesByTag();
 
         $pageUrls = [];
         $newHosts = [];
+        $tags = [];
         foreach ($pageIds as $pageId) {
             if ($pageId <= 0 || isset($done[$pageId])) {
                 continue;
             }
             $done[$pageId] = true;
+            if ($byTag) {
+                $tags[] = EdgeCacheTags::pageTag($pageId);
+            }
             $urls = $this->caddyCacheService->getPageUrls($pageId);
             if ($urls === []) {
                 continue;
             }
             $pageUrls[] = $urls;
+            if ($byTag) {
+                continue;
+            }
             foreach ($urls as $url) {
                 $host = CaddyCacheService::hostOf($url);
                 if (!isset($hostsDone[$host])) {
@@ -256,12 +304,22 @@ class CacheInvalidationListener
                 }
             }
         }
-        if ($pageUrls !== []) {
-            $this->messageBus->dispatch(new PurgeEdgeCache($pageUrls, $newHosts, PurgeAudit::originContext()));
+        if ($byTag) {
+            $tags = array_values(array_filter(
+                EdgeCacheTags::usable([...$tags, ...$otherTags]),
+                static fn(string $tag): bool => !isset($tagsDone[$tag]),
+            ));
+            foreach ($tags as $tag) {
+                $tagsDone[$tag] = true;
+            }
+        }
+        if ($pageUrls !== [] || $tags !== []) {
+            $this->messageBus->dispatch(new PurgeEdgeCache($pageUrls, $newHosts, PurgeAudit::originContext(), $tags));
         }
 
         self::$purgedPerDataHandler[$dataHandler] = $done;
         self::$queryVariantHostsPerDataHandler[$dataHandler] = $hostsDone;
+        self::$purgedTagsPerDataHandler[$dataHandler] = $tagsDone;
     }
 
     private function deferFullFlush(string $reason): void

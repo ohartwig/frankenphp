@@ -20,6 +20,10 @@ namespace Koh\FrankenPHP\Message;
  * $origin is the PurgeAudit context of the request that asked for the purge,
  * when the audit was on there, so the audit line written where the purge is
  * sent still names the request and the backend user behind it.
+ *
+ * $tags are the Surrogate-Keys to purge (KOH_EDGE_PURGE_BY_TAG, see
+ * EdgeCacheTags). Last and defaulted, so that a message queued by an earlier
+ * release still decodes and reads as "no tags".
  */
 final readonly class PurgeEdgeCache
 {
@@ -27,10 +31,12 @@ final readonly class PurgeEdgeCache
      * @param list<list<string>>        $pageUrls         one list per page, as CaddyCacheService::getPageUrls() returned it
      * @param list<string>              $queryVariantUrls one URL per host whose query-string variants are purged
      * @param array<string, mixed>|null $origin           PurgeAudit::originContext() of the requesting code path
+     * @param list<string>              $tags             Surrogate-Keys to purge
      */
     public function __construct(
         public array $pageUrls,
         public array $queryVariantUrls = [],
         public ?array $origin = null,
+        public array $tags = [],
     ) {}
 }
