@@ -3,6 +3,12 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.14.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.14.0...v5.14.1) (2026-11-11)
+
+### :bug: Fixes
+
+* **cache:** purge only tags a response can carry ([1209280](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/12092802bdb90ccb82735edb6c426ee2c6707a22))
+
 ## [5.14.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.13.0...v5.14.0) (2026-11-11)
 
 ### :sparkles: Features
