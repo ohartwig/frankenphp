@@ -56,6 +56,11 @@ page {
         50.wrap = <li data-marker="ts.link.self">|</li>
     }
 
+    # Fluid through a global namespace (no namespace declaration in the
+    # template), see MarkerViewHelper.
+    25 = FLUIDTEMPLATE
+    25.file = EXT:worker_alternation_markers/Resources/Private/Templates/FluidMarkers.html
+
     # The main menu: both pages of the site, the current one marked.
     30 = HMENU
     30 {

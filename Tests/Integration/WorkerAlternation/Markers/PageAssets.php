@@ -49,7 +49,9 @@ final class PageAssets
             ->addProperty('wa-mt', 'wa-mt-' . $key);
 
         $assetCollector = GeneralUtility::makeInstance(AssetCollector::class);
-        $assetCollector->addInlineJavaScript('wa-ac-js-' . $key, '/* wa-ac-js-' . $key . ' */ window.waAssetCollector = "' . $key . '";');
+        // With the request's CSP nonce: the runner compares it with the
+        // Content-Security-Policy header of the same response.
+        $assetCollector->addInlineJavaScript('wa-ac-js-' . $key, '/* wa-ac-js-' . $key . ' */ window.waAssetCollector = "' . $key . '";', [], ['csp' => true]);
         $assetCollector->addStyleSheet('wa-ac-css-' . $key, 'https://assets.example/wa-ac-css-' . $key . '.css');
 
         return '';

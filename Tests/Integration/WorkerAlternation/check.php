@@ -21,6 +21,13 @@ declare(strict_types=1);
  * (EXT:seo and page.meta, through MetaTagManagerRegistry), a meta tag of an
  * extension's own meta tag manager, canonical, hreflang, html lang, JSON-LD
  * @id and url, and the main menu must mark this page as the current one.
+ * Its Content-Security-Policy header must be its site's (the package policy,
+ * the site's csp.yaml, never the other site's), the same for every response
+ * of that page apart from the nonce, with a nonce that is used in its body
+ * and was never sent before. A ViewHelper through a global Fluid namespace
+ * must render for this page and language. After every site B page,
+ * ConfigServiceMutator changes the CSP and Fluid namespace configuration in
+ * place; no later response may show that change.
  *
  * Between the page requests it fills in forms of the form framework on both
  * sites and in both languages (see the form scenarios below), POSTs that run
@@ -154,6 +161,10 @@ foreach ($sites as $identifier => $site) {
                     'late.mw.globals_host' => $authority,
                     'late.mw.globals_path' => $path,
                     'late.mw.globals_page_id' => (string) $pageId,
+                    // Fluid through a global namespace, and no namespace a
+                    // site B request added afterwards (ConfigServiceMutator)
+                    'fluid.viewhelper' => 'wa-' . $pageId . '-' . $languageId,
+                    'fluid.namespace_leak' => '0',
                 ],
             ];
         }
@@ -266,11 +277,28 @@ curl_setopt_array($curl, [
     CURLOPT_FOLLOWLOCATION => false,
     CURLOPT_TIMEOUT => 30,
     CURLOPT_HTTPHEADER => ['Cache-Control: no-cache'],
+    // The response headers of the request under way, lower-case names; see $send.
+    CURLOPT_HEADERFUNCTION => static function ($curl, string $line) use (&$responseHeaders): int {
+        $parts = explode(':', $line, 2);
+        if (count($parts) === 2) {
+            $responseHeaders[strtolower(trim($parts[0]))][] = trim($parts[1]);
+        }
+
+        return strlen($line);
+    },
 ]);
+/** @var array<string, list<string>> $responseHeaders */
+$responseHeaders = [];
 
 $failures = [];
 // Checks that report without failing the run, see below.
 $warnings = [];
+// Every CSP nonce a response carried; a nonce seen twice was kept from an
+// earlier request.
+$nonces = [];
+// Per target: its Content-Security-Policy with the nonces taken out, as the
+// first response for it had it.
+$policies = [];
 $appendLength = null;
 $previousTimestamp = 0;
 $token = null;
@@ -299,7 +327,7 @@ $started = microtime(true);
  */
 $send = function (string $key, ?string $url = null, ?array $post = null, array $ownValues = [], bool $strict = true) use (
     &$failures, &$warnings, &$appendLength, &$previousTimestamp, &$token, &$firstCount, &$lastCount,
-    &$tokens, &$pids, &$number, &$posts, &$submitted, $targets, $curl, $headFacts,
+    &$tokens, &$pids, &$number, &$posts, &$submitted, &$responseHeaders, &$nonces, &$policies, $targets, $curl, $headFacts, $sites,
 ): array|string|null {
     $target = $targets[$key];
     $url ??= $target['url'];
@@ -316,6 +344,7 @@ $send = function (string $key, ?string $url = null, ?array $post = null, array $
         curl_setopt($curl, CURLOPT_POSTFIELDS, $post);
         ++$posts;
     }
+    $responseHeaders = [];
     $before = time();
     $body = curl_exec($curl);
     $after = time();
@@ -418,6 +447,59 @@ $send = function (string $key, ?string $url = null, ?array $post = null, array $
         $actual = $head[$name] ?? [];
         if ($actual !== $expected) {
             $failures[] = sprintf('%s: head %s is %s, expected %s', $label, $name, json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), json_encode($expected, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        }
+    }
+
+    // Content-Security-Policy: this site's policy (the package's source, the
+    // site's own source from its csp.yaml, never another site's), nothing a
+    // site B request added to the kept policies afterwards, the same policy
+    // as the first response for this page, and nonces that are this
+    // response's own: used in its body, never seen before.
+    $site = explode('/', $key)[0];
+    $cspHeaders = $responseHeaders['content-security-policy'] ?? [];
+    if (count($cspHeaders) !== 1) {
+        $failures[] = sprintf('%s: %d Content-Security-Policy headers, expected exactly one', $label, count($cspHeaders));
+    } else {
+        $csp = $cspHeaders[0];
+        $required = ['https://wa-package.example', 'https://' . $site . '.example'];
+        $forbidden = ['https://leak.example'];
+        foreach (array_keys($sites) as $other) {
+            if ($other !== $site) {
+                $forbidden[] = 'https://' . $other . '.example';
+            }
+        }
+        foreach ($required as $source) {
+            if (!str_contains($csp, $source)) {
+                $failures[] = sprintf('%s: Content-Security-Policy lacks %s: %s', $label, $source, $csp);
+            }
+        }
+        foreach ($forbidden as $source) {
+            if (str_contains($csp, $source)) {
+                $failures[] = sprintf('%s: Content-Security-Policy allows %s: %s', $label, $source, $csp);
+            }
+        }
+        preg_match_all("#'nonce-([^']+)'#", $csp, $found);
+        if ($found[1] === []) {
+            $failures[] = sprintf('%s: Content-Security-Policy without a nonce: %s', $label, $csp);
+        }
+        foreach (array_unique($found[1]) as $nonce) {
+            if (isset($nonces[$nonce])) {
+                $failures[] = sprintf('%s: CSP nonce %s was already sent with request #%d', $label, $nonce, $nonces[$nonce]);
+            }
+            $nonces[$nonce] = $number;
+            if (!str_contains($body, 'nonce="' . $nonce . '"')) {
+                $failures[] = sprintf('%s: CSP nonce %s of the header is not used in the body', $label, $nonce);
+            }
+        }
+        preg_match_all('#\bnonce="([^"]+)"#', $body, $used);
+        foreach (array_diff(array_unique($used[1]), $found[1]) as $nonce) {
+            $failures[] = sprintf('%s: nonce %s in the body is not in the Content-Security-Policy header', $label, $nonce);
+        }
+        // The nonce and the report URI's request time and hash are per request.
+        $policy = (string) preg_replace(["#'nonce-[^']+'#", '#requestTime=\\d+&requestHash=[0-9a-f]+#'], ["'nonce-*'", 'requestTime=*&requestHash=*'], $csp);
+        $policies[$key] ??= $policy;
+        if ($policy !== $policies[$key]) {
+            $failures[] = sprintf("%s: Content-Security-Policy differs from the first response for this page:\n  now:   %s\n  first: %s", $label, $policy, $policies[$key]);
         }
     }
 

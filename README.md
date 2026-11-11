@@ -47,6 +47,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | `KOH_CHASH_REDIRECT` | Redirect page URLs that carry parameters without the required cHash to the same URL without them, instead of the 404 (see `CacheHashRedirectMiddleware`); `0` restores the 404 | `1` |
 | `KOH_PERSISTENT_BOOTSTRAP` | Boot TYPO3 once per worker and start every later request from the recorded boot state instead of booting again (see *Persistent bootstrap*); `0` boots per request, as before | `0` |
 | `KOH_PERSISTENT_BOOTSTRAP_AUDIT` | Diagnostics for the persistent bootstrap: log the kept objects and what each request changes in them (see *Persistent bootstrap*, *Audit*) | `0` |
+| `KOH_PERSISTENT_CONFIG_SERVICES` | With `KOH_PERSISTENT_BOOTSTRAP=1`: build the CSP policies and the Fluid namespaces and component collections with the boot and keep them, checked and put back before every request (see *Persistent bootstrap*, *Configuration services*) | `0` |
 | `KOH_WORKER_CACHE_MEMO` | Skip the HMAC check (and, for object-free payloads, `unserialize()`) of read-mostly cache entries whose backend bytes this worker already verified (see *Worker memos*) | `0` |
 | `KOH_WORKER_TEMPLATE_PATH_MEMO` | Remember Fluid's file lookups inside code directories per worker (see *Worker memos*) | `0` |
 | `KOH_REQUEST_TIMING` | One JSON line per frontend request the worker serves: bootstrap and application time apart, and whether TYPO3 rendered the page (see *Request timing*); `0` switches it off | `1` |
@@ -111,6 +112,8 @@ and the worker ends, so FrankenPHP starts a fresh one for the next request. Of t
 ```
 
 A kept object's own properties are restored anyway; what the audit is for are the objects behind them and static properties, which nothing restores.
+
+**Configuration services.** `KOH_PERSISTENT_CONFIG_SERVICES=1` (only with `KOH_PERSISTENT_BOOTSTRAP=1`) builds `content.security.policies`, `fluid.namespaces` and `fluid.component.collections` before the boot state is recorded, so they are kept instead of being derived again from the package list by every request (one file check per package and service). Their content is what KeptObjectState cannot put back: the Fluid services are `ArrayObject`s, the policies a `Map` of further maps. So their state right after the boot is recorded separately, and before every request each is compared with it; one that a request changed in place is put back in place, the same object, and reported as `{"koh_worker_drift":…,"objects":[…],"restored":true}`. Reading the policies moves their iteration cursor; that is put back without a report. The worker alternation test runs with the switch on as well (`test:worker-alternation:config-services`), with a middleware that changes both kinds after every site B page; no later response may show it.
 
 **Static properties are not reset**, in either mode: TYPO3 offers no inventory of what an extension keeps in static properties, and resetting them to their defaults would also drop what is meant to last, such as `ConnectionPool`'s connections. An extension that appends to a static property in a constructor (the worker alternation test's check 5) grows by one piece per request in either mode. `MAX_REQUESTS` bounds that: the worker restarts after that many requests.
 
@@ -403,8 +406,19 @@ and would keep if the bootstrap were shared between requests:
    - a submission with a changed `__trustedProperties` or `__state` (the
      signature kept) is refused: no confirmation, no row;
    - no response contains a value an earlier submission sent.
+8. **Content security policy and Fluid configuration:** each site has its
+   own `csp.yaml` and the markers package a frontend policy of its own; every
+   response's `Content-Security-Policy` header must carry the package's and
+   its own site's source and never the other site's, must be the same for
+   every response of that page apart from the nonce and the report URI's
+   request time, and its nonce must be used in the body and never have been
+   sent before. A ViewHelper reached through a global Fluid namespace
+   (`Configuration/Fluid/Namespaces.php`, no declaration in the template)
+   renders the page and language. After every site B page a middleware
+   changes the policies and the global Fluid namespaces in place; no later
+   response may allow its source or know its namespace.
 
-The worker passes checks 1 to 4, 6 and 7 in both modes, booting per request
+The worker passes checks 1 to 4 and 6 to 8 in both modes, booting per request
 and with `KOH_PERSISTENT_BOOTSTRAP=1`. Check 1 includes a marker that is only
 set on a Context object that has already served a request, so it also proves
 that every request gets a new Context. Check 5 does not pass in either mode:

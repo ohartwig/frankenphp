@@ -60,6 +60,10 @@ echo "KOH_PERSISTENT_BOOTSTRAP=$WA_PERSISTENT_BOOTSTRAP"
 WA_WORKER_MEMO=${WA_WORKER_MEMO:-0}
 export WA_WORKER_MEMO
 echo "KOH_WORKER_CACHE_MEMO=KOH_WORKER_TEMPLATE_PATH_MEMO=$WA_WORKER_MEMO"
+# KOH_PERSISTENT_CONFIG_SERVICES: only with the persistent bootstrap.
+WA_PERSISTENT_CONFIG_SERVICES=${WA_PERSISTENT_CONFIG_SERVICES:-0}
+export WA_PERSISTENT_CONFIG_SERVICES
+echo "KOH_PERSISTENT_CONFIG_SERVICES=$WA_PERSISTENT_CONFIG_SERVICES"
 WA_PROJECT_DIR="$PROJECT" MAX_REQUESTS=100000 \
     frankenphp run --config "$HERE/Caddyfile" --adapter caddyfile >"$LOG" 2>&1 &
 SERVER_PID=$!
@@ -93,6 +97,19 @@ php -d display_errors=stderr "$HERE/check.php" 127.0.0.1 8080 "$PROJECT" || rc=$
 echo "--- request timing (koh_timing lines of this run)"
 if [ "$WA_PERSISTENT_BOOTSTRAP" = 1 ]; then mode=persistent; else mode=fresh; fi
 php "$HERE/timing.php" "$LOG" "$mode" || rc=1
+
+# With the configuration services kept, ConfigServiceMutator's changes must
+# have been found and put back (koh_worker_drift ... "restored":true) for
+# both the Fluid namespaces and the policies; check.php saw that no later
+# response carried them.
+if [ "$WA_PERSISTENT_BOOTSTRAP" = 1 ] && [ "$WA_PERSISTENT_CONFIG_SERVICES" = 1 ]; then
+    for label in 'service:fluid.namespaces' 'service:content.security.policies'; do
+        if ! grep '"restored":true' "$LOG" | grep -q "$label"; then
+            echo "No restored drift of $label in the log: the configuration services were not kept, or a change went unnoticed." >&2
+            rc=1
+        fi
+    done
+fi
 
 if [ "$rc" != 0 ]; then
     echo "--- FrankenPHP log (last 80 lines)"
