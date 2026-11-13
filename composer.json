@@ -36,6 +36,7 @@
             "url": "https://git.ole-hartwig.eu/api/v4/group/175/-/packages/composer/packages.json",
             "only": [
                 "hn/typo3-mcp-server",
+                "moselwal/keyvalue-store",
                 "netresearch/nr-passkeys-be"
             ]
         },
