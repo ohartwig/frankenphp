@@ -89,4 +89,61 @@ final class VerifiedPayloadMemoTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         new VerifiedPayloadMemo(0);
     }
+
+    #[Test]
+    public function aCandidateNeedsAValidatorAndAPayloadOfTheMinimumSize(): void
+    {
+        $memo = new VerifiedPayloadMemo(1000, 4);
+        $memo->remember('large', new VerifiedPayload('abcd', 4, false, null, 10, '4:abcd'));
+        $memo->remember('small', new VerifiedPayload('abc', 3, false, null, 10, '3:abc'));
+        $memo->remember('plain', self::entry('abcdef', 10));
+
+        self::assertSame('4:abcd', $memo->candidate('large')?->validator);
+        self::assertNull($memo->candidate('small'));
+        self::assertNull($memo->candidate('plain'));
+        self::assertNull($memo->candidate('unknown'));
+        self::assertSame(['hits' => 0, 'misses' => 0], array_intersect_key($memo->stats(), ['hits' => 0, 'misses' => 0]), 'asking for a candidate is not a read');
+    }
+
+    #[Test]
+    public function aMinimumOfZeroMeansNoCandidates(): void
+    {
+        $memo = new VerifiedPayloadMemo(1000, 0);
+        $memo->remember('k', new VerifiedPayload('abcd', 4, false, null, 10, '4:abcd'));
+
+        self::assertNull($memo->candidate('k'));
+    }
+
+    #[Test]
+    public function aConfirmedEntryCountsAsAHitAndBecomesTheMostRecentlyUsed(): void
+    {
+        $memo = new VerifiedPayloadMemo(100, 1);
+        $memo->remember('a', new VerifiedPayload('a', 1, false, null, 40, '1:a'));
+        $memo->remember('b', new VerifiedPayload('b', 1, false, null, 40, '1:b'));
+
+        $memo->confirm('a');
+        $memo->confirm('unknown');
+        $memo->remember('c', self::entry('c', 40));
+
+        self::assertNotNull($memo->candidate('a'));
+        self::assertNull($memo->candidate('b'), 'b was the least recently used');
+        self::assertSame(['hits' => 1, 'confirmed' => 1], array_intersect_key($memo->stats(), ['hits' => 0, 'confirmed' => 0]));
+    }
+
+    #[Test]
+    public function aNewValidatorChangesWhatTheEntryCounts(): void
+    {
+        $entry = new VerifiedPayload('abcd', 4, false, null, 10, '4:abcd');
+
+        self::assertSame(4, $entry->withValidator(null)->bytes);
+        self::assertSame(12, $entry->withValidator('4:abcdxx')->bytes);
+        self::assertSame('4:abcdxx', $entry->withValidator('4:abcdxx')->validator);
+    }
+
+    #[Test]
+    public function aNegativeMinimumIsRejected(): void
+    {
+        $this->expectExceptionCode(1794320002);
+        new VerifiedPayloadMemo(1000, -1);
+    }
 }

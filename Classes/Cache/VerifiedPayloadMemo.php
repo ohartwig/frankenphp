@@ -11,10 +11,11 @@ namespace Koh\FrankenPHP\Cache;
  * An entry is the exact byte string a cache backend returned, the length of
  * its serialised part (the payload without the HMAC suffix) and, only for
  * payloads that contain no objects and no PHP references, the decoded value.
- * It is consulted with the bytes the backend returned for the current read
- * and answers only when those bytes are identical to the remembered ones, so
- * it can never serve anything the shared backend does not hold at that very
- * moment.
+ * It answers only for what the shared backend holds at the moment of the
+ * read: either the bytes the backend returned for this read are identical to
+ * the remembered ones ({@see find()}), or the backend itself said, for this
+ * read, that it still stores the bytes it issued the entry's validator for
+ * ({@see candidate()}, {@see confirm()}).
  *
  * Bounded by bytes (the raw payload plus the measured size of a kept value),
  * least recently used first out. One instance per PHP process; in FrankenPHP
@@ -29,6 +30,13 @@ final class VerifiedPayloadMemo
 {
     public const DEFAULT_MAX_BYTES = 33554432;
 
+    /**
+     * Payload size from which a conditional read replaces the full one.
+     * Below, fetching the payload costs the same round trip (measured: no
+     * gain up to 2 kB, 30 % at 30 kB, 97 % at 2.2 MB).
+     */
+    public const DEFAULT_CONDITIONAL_READ_MIN_BYTES = 16384;
+
     private static ?self $instance = null;
 
     /** @var array<string, VerifiedPayload> least recently used first */
@@ -42,10 +50,21 @@ final class VerifiedPayloadMemo
 
     private int $evictions = 0;
 
-    public function __construct(private readonly int $maxBytes = self::DEFAULT_MAX_BYTES)
-    {
+    private int $confirmed = 0;
+
+    /**
+     * @param int $conditionalReadMinBytes payloads of at least this many bytes are validated with a
+     *                                     conditional read where the backend offers one; 0: never
+     */
+    public function __construct(
+        private readonly int $maxBytes = self::DEFAULT_MAX_BYTES,
+        public readonly int $conditionalReadMinBytes = self::DEFAULT_CONDITIONAL_READ_MIN_BYTES,
+    ) {
         if ($maxBytes < 1) {
             throw new \InvalidArgumentException('maxBytes must be >= 1', 1794320001);
+        }
+        if ($conditionalReadMinBytes < 0) {
+            throw new \InvalidArgumentException('conditionalReadMinBytes must be >= 0', 1794320002);
         }
     }
 
@@ -62,7 +81,7 @@ final class VerifiedPayloadMemo
             return null;
         }
 
-        return self::$instance = new self(WorkerCacheMemo::maxBytes());
+        return self::$instance = new self(WorkerCacheMemo::maxBytes(), WorkerCacheMemo::conditionalReadMinBytes());
     }
 
     /**
@@ -71,6 +90,44 @@ final class VerifiedPayloadMemo
     public static function setInstance(?self $memo): void
     {
         self::$instance = $memo;
+    }
+
+    /**
+     * The remembered entry for $key that a conditional read may validate:
+     * one with a validator and a payload of at least conditionalReadMinBytes.
+     * Says nothing about what the backend holds; only {@see confirm()}, after
+     * the backend answered "unchanged" for the entry's validator, makes it a
+     * hit.
+     */
+    public function candidate(string $key): ?VerifiedPayload
+    {
+        $entry = $this->entries[$key] ?? null;
+        if (
+            $entry === null
+            || $entry->validator === null
+            || $this->conditionalReadMinBytes < 1
+            || \strlen($entry->raw) < $this->conditionalReadMinBytes
+        ) {
+            return null;
+        }
+
+        return $entry;
+    }
+
+    /**
+     * Counts a hit the backend confirmed without sending the payload.
+     */
+    public function confirm(string $key): void
+    {
+        $entry = $this->entries[$key] ?? null;
+        if ($entry === null) {
+            return;
+        }
+        // Most recently used goes to the end.
+        unset($this->entries[$key]);
+        $this->entries[$key] = $entry;
+        ++$this->hits;
+        ++$this->confirmed;
     }
 
     /**
@@ -151,7 +208,8 @@ final class VerifiedPayloadMemo
     }
 
     /**
-     * @return array{hits: int, misses: int, evictions: int, entries: int, bytes: int}
+     * @return array{hits: int, misses: int, evictions: int, entries: int, bytes: int, confirmed: int} confirmed:
+     *                                                                                               the hits a conditional read answered
      */
     public function stats(): array
     {
@@ -161,6 +219,7 @@ final class VerifiedPayloadMemo
             'evictions' => $this->evictions,
             'entries' => \count($this->entries),
             'bytes' => $this->bytes,
+            'confirmed' => $this->confirmed,
         ];
     }
 }

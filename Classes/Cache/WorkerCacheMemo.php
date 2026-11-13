@@ -12,11 +12,13 @@ use TYPO3\CMS\Core\Serializer\AuthenticatedMessageDeserializer;
  * Switch and wiring of the worker cache memo (KOH_WORKER_CACHE_MEMO=1).
  *
  * `configure()` (called from ext_localconf.php) gives the listed caches the
- * {@see WorkerMemoVariableFrontend}. That frontend reads the backend on every
- * get() exactly as before; in a FrankenPHP worker it skips the HMAC check and,
- * for object-free payloads, unserialize() as well, when the backend returned
- * bytes identical to bytes it already verified. Outside a worker (CLI,
- * classic requests, backend pods) it is the core VariableFrontend.
+ * {@see WorkerMemoVariableFrontend}. That frontend asks the backend on every
+ * get(), as before; in a FrankenPHP worker it skips the HMAC check and, for
+ * object-free payloads, unserialize() as well, when the backend holds bytes
+ * identical to bytes it already verified. For large payloads on a backend
+ * with conditional reads the backend answers that without sending them.
+ * Outside a worker (CLI, classic requests, backend pods) it is the core
+ * VariableFrontend.
  *
  * Only caches that already exist when this extension's ext_localconf.php runs
  * and use the plain VariableFrontend are switched; a cache defined later by
@@ -31,6 +33,8 @@ final class WorkerCacheMemo
     public const ENV_CACHES = 'KOH_WORKER_CACHE_MEMO_CACHES';
 
     public const ENV_MAX_BYTES = 'KOH_WORKER_CACHE_MEMO_MAX_BYTES';
+
+    public const ENV_CONDITIONAL_READ_MIN_BYTES = 'KOH_WORKER_CACHE_MEMO_CONDITIONAL_MIN_BYTES';
 
     /**
      * Read-mostly caches whose reads dominate an uncached render (measured on
@@ -61,6 +65,22 @@ final class WorkerCacheMemo
     public static function maxBytes(): int
     {
         return WorkerSwitch::positiveInt(self::ENV_MAX_BYTES, VerifiedPayloadMemo::DEFAULT_MAX_BYTES);
+    }
+
+    /**
+     * Payload size from which the frontend validates with a conditional read
+     * (where the backend offers one); 0 switches conditional reads off.
+     *
+     * @return int<0, max>
+     */
+    public static function conditionalReadMinBytes(): int
+    {
+        $value = WorkerSwitch::value(self::ENV_CONDITIONAL_READ_MIN_BYTES);
+        if ($value === null || preg_match('/^[0-9]+$/', $value) !== 1) {
+            return VerifiedPayloadMemo::DEFAULT_CONDITIONAL_READ_MIN_BYTES;
+        }
+
+        return max(0, (int) $value);
     }
 
     /**
