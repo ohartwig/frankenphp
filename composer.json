@@ -24,7 +24,11 @@
         "typo3/cms-frontend": "^13.4 || ^14.0"
     },
     "require-dev": {
-        "koh/dev-typo3": "^1.0"
+        "koh/dev-typo3": "^1.0",
+        "moselwal/keyvalue-store": "^4.8"
+    },
+    "suggest": {
+        "moselwal/keyvalue-store": "^4.8: its cache backend answers the worker cache memo's reads of large entries without sending them (conditional reads)"
     },
     "repositories": [
         {

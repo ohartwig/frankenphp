@@ -19,6 +19,7 @@ final class WorkerCacheMemoTest extends TestCase
         putenv(WorkerCacheMemo::ENV);
         putenv(WorkerCacheMemo::ENV_CACHES);
         putenv(WorkerCacheMemo::ENV_MAX_BYTES);
+        putenv(WorkerCacheMemo::ENV_CONDITIONAL_READ_MIN_BYTES);
         VerifiedPayloadMemo::setInstance(null);
     }
 
@@ -95,6 +96,11 @@ final class WorkerCacheMemoTest extends TestCase
             $memo = VerifiedPayloadMemo::active();
             self::assertNotNull($memo);
             self::assertSame($memo, VerifiedPayloadMemo::active(), 'one memo per process');
+            self::assertSame(VerifiedPayloadMemo::DEFAULT_CONDITIONAL_READ_MIN_BYTES, $memo->conditionalReadMinBytes);
+
+            VerifiedPayloadMemo::setInstance(null);
+            putenv(WorkerCacheMemo::ENV_CONDITIONAL_READ_MIN_BYTES . '=0');
+            self::assertSame(0, VerifiedPayloadMemo::active()?->conditionalReadMinBytes, 'conditional reads switched off');
         } finally {
             if ($backup === null) {
                 unset($_SERVER['FRANKENPHP_WORKER']);
@@ -123,6 +129,20 @@ final class WorkerCacheMemoTest extends TestCase
         self::assertSame(1048576, WorkerCacheMemo::maxBytes());
         putenv(WorkerCacheMemo::ENV_MAX_BYTES . '=-5');
         self::assertSame(VerifiedPayloadMemo::DEFAULT_MAX_BYTES, WorkerCacheMemo::maxBytes());
+    }
+
+    #[Test]
+    public function theConditionalReadThresholdComesFromTheEnvironmentAndZeroSwitchesItOff(): void
+    {
+        self::assertSame(16384, WorkerCacheMemo::conditionalReadMinBytes());
+        putenv(WorkerCacheMemo::ENV_CONDITIONAL_READ_MIN_BYTES . '=65536');
+        self::assertSame(65536, WorkerCacheMemo::conditionalReadMinBytes());
+        putenv(WorkerCacheMemo::ENV_CONDITIONAL_READ_MIN_BYTES . '=0');
+        self::assertSame(0, WorkerCacheMemo::conditionalReadMinBytes());
+        putenv(WorkerCacheMemo::ENV_CONDITIONAL_READ_MIN_BYTES . '=-5');
+        self::assertSame(16384, WorkerCacheMemo::conditionalReadMinBytes());
+        putenv(WorkerCacheMemo::ENV_CONDITIONAL_READ_MIN_BYTES . '=many');
+        self::assertSame(16384, WorkerCacheMemo::conditionalReadMinBytes());
     }
 
     #[Test]
