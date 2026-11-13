@@ -3,6 +3,12 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.14.2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.14.1...v5.14.2) (2026-11-13)
+
+### :fast_forward: Performance
+
+* **cache:** validate large memoised cache entries with a conditional read ([ca90f2c](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/ca90f2c51c40d8a1e8567c7b3628738b797aaf35))
+
 ## [5.14.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.14.0...v5.14.1) (2026-11-11)
 
 ### :bug: Fixes
