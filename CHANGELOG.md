@@ -3,6 +3,20 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.15.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.14.2...v5.15.0) (2026-11-19)
+
+### :sparkles: Features
+
+* **worker:** spread worker restarts by moving MAX_REQUESTS per worker ([fcd2843](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/fcd28434a65cb79b8526d8f8ef7d1a86ae84472a))
+
+### :memo: Documentation
+
+* name the MIT licence in the README ([20cabd6](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/20cabd6ea858f4f7edd1451818a661cf8bdefa41))
+
+### :repeat: Chores
+
+* **deps:** update dependency registry.ole-hartwig.eu/devops/images/franken-php/ci to v3.2.246-8.5 ([63f43a9](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/63f43a925bef371e587ed7d8e0c0e28c8c935bd6))
+
 ## [5.14.2](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.14.1...v5.14.2) (2026-11-13)
 
 ### :fast_forward: Performance
