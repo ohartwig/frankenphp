@@ -147,6 +147,75 @@ final class FrontendWorkerTest extends TestCase
     }
 
     /**
+     * An exception nothing in the application caught gets the answer TYPO3's
+     * exception handler gives it, status included: a page that does not exist
+     * is a 404 with TYPO3's error page, not a bare 500.
+     */
+    #[Test]
+    public function anUncaughtExceptionIsAnsweredByTheHandlerTheRequestRegistered(): void
+    {
+        $output = $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/ErrorPageRenderingAutoload.php'));
+
+        self::assertSame('<h1>Page Not Found</h1>', $output);
+        self::assertSame(404, http_response_code());
+    }
+
+    /** The exception is still logged by the worker, whoever answers it. */
+    #[Test]
+    public function anExceptionTheHandlerAnswersIsLoggedAllTheSame(): void
+    {
+        $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/ErrorPageRenderingAutoload.php'));
+
+        self::assertStringContainsString('FrankenPHP worker exception: the page does not exist', $this->log);
+    }
+
+    /**
+     * A handler that fails while rendering leaves neither its half page nor
+     * its status: the worker answers the plain 500 it always had.
+     */
+    #[Test]
+    public function aHandlerThatFailsItselfLeavesThePlainFiveHundred(): void
+    {
+        $output = $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/FailingErrorPageAutoload.php'));
+
+        self::assertSame('Internal Server Error', $output);
+        self::assertSame(500, http_response_code());
+        self::assertStringContainsString('the exception handler failed too: the error page could not be rendered', $this->log);
+    }
+
+    /** A handler that prints nothing is no answer either. */
+    #[Test]
+    public function aHandlerThatPrintsNothingLeavesThePlainFiveHundred(): void
+    {
+        $output = $this->runCapturing($this->worker('/a-page', __DIR__ . '/../../Fixtures/HandlerRegisteringAutoload.php'));
+
+        self::assertSame('Internal Server Error', $output);
+        self::assertSame(500, http_response_code());
+    }
+
+    /**
+     * The handler in place before the worker started is the test runner's,
+     * or PHP's own: it is never asked to render a page.
+     */
+    #[Test]
+    public function theHandlerFromBeforeTheLoopIsNeverAsked(): void
+    {
+        $asked = false;
+        set_exception_handler(static function () use (&$asked): void {
+            $asked = true;
+            echo 'not a page';
+        });
+        try {
+            $output = $this->runCapturing($this->worker('/a-page'));
+        } finally {
+            restore_exception_handler();
+        }
+
+        self::assertFalse($asked);
+        self::assertSame('Internal Server Error', $output);
+    }
+
+    /**
      * A request starts clean even when something left state behind before it —
      * the reset at the start of a request, not only the one after the last.
      */
