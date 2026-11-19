@@ -22,7 +22,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 
 | Class | Responsibility |
 |---|---|
-| `Classes/Runtime/FrontendWorker` | Worker loop with `frankenphp_handle_request()`, a fresh TYPO3 bootstrap per request with `REQUESTTYPE_FE` |
+| `Classes/Runtime/FrontendWorker` | Worker loop with `frankenphp_handle_request()`, a fresh TYPO3 bootstrap per request with `REQUESTTYPE_FE`. An exception nothing in the application caught is answered by the exception handler TYPO3 registered for the request, as without a worker: the status the exception asks for (404 for a page that does not exist on a site without error handling) and TYPO3's error page. Only when there is no such handler, or it fails itself, the answer is a plain `500` |
 | `Classes/Runtime/RequestStateReset` | Clears what survives a bootstrap in a long-lived process: the `getIndpEnv()` cache (host and URL of the previous request), singletons, `BE_USER`/`LANG`/`TYPO3_REQUEST`, and the error and exception handlers each bootstrap registers |
 | `Classes/Runtime/DatabaseConnectionReuse` | Keeps the database connection open for the next request, so the TCP/TLS handshake is not paid per request, and closes it when that is not safe: a transaction left open (rolled back and logged), idle longer than the idle limit, older than the age limit, past the request limit, or not answering a `SELECT 1` before the request |
 | `Classes/Runtime/PersistentBootstrap` | With `KOH_PERSISTENT_BOOTSTRAP=1`: boots TYPO3 for the first two requests, records the state of the second boot, and puts it back before every later request (see *Persistent bootstrap*) |
