@@ -12,7 +12,9 @@ namespace Koh\FrankenPHP\Runtime;
  * that state before and after every request (see RequestStateReset). Database
  * connections are the exception: DatabaseConnectionReuse decides at the same
  * two points whether they stay open for the next request.
- * Backend and Install requests are rejected with HTTP 503. Every frontend
+ * Backend and Install requests are rejected with HTTP 503. An exception that
+ * escapes the application is answered by the exception handler TYPO3
+ * registered for the request, as it would be without a worker. Every frontend
  * request it serves is timed (RequestTiming): bootstrap and application
  * separately, and whether TYPO3 rendered the page.
  *
@@ -51,8 +53,8 @@ final readonly class FrontendWorker
         while ($nbRequests < $maxRequests && $running) {
             $workerRequest = $nbRequests + 1;
             $clean = true;
-            $running = \frankenphp_handle_request(function () use ($workerRequest, &$clean): void {
-                $clean = $this->handleRequest($workerRequest);
+            $running = \frankenphp_handle_request(function () use ($workerRequest, &$clean, $handlers): void {
+                $clean = $this->handleRequest($workerRequest, $handlers[1]);
             });
             // A worker that served state from another request serves nothing
             // more.
@@ -70,9 +72,11 @@ final readonly class FrontendWorker
     }
 
     /**
+     * @param mixed $workerExceptionHandler the exception handler in place before the loop started; never TYPO3's
+     *
      * @return bool false if the leak guard found state from another request
      */
-    private function handleRequest(int $workerRequest = 1): bool
+    private function handleRequest(int $workerRequest = 1, mixed $workerExceptionHandler = null): bool
     {
         $start = hrtime(true);
         RequestStateReset::resetRequestState();
@@ -120,17 +124,27 @@ final readonly class FrontendWorker
                 }
             }
         } catch (\Throwable $e) {
-            ob_end_clean();
-            http_response_code(500);
-            header('Content-Type: text/plain; charset=utf-8');
-            echo 'Internal Server Error';
+            // Nothing of the failed attempt may reach the client, whatever
+            // buffers TYPO3 opened on top of the worker's.
+            while (ob_get_level() > $outputLevel) {
+                ob_end_clean();
+            }
             error_log(sprintf(
                 'FrankenPHP worker exception: %s in %s:%d',
                 $e->getMessage(),
                 $e->getFile(),
                 $e->getLine()
             ));
-            RequestTiming::record($start, $booted, hrtime(true), 500, $workerRequest, $reused);
+            http_response_code(500);
+            $page = self::errorPage($e, $workerExceptionHandler);
+            if ($page === null) {
+                http_response_code(500);
+                header('Content-Type: text/plain; charset=utf-8');
+                $page = 'Internal Server Error';
+            }
+            echo $page;
+            $status = http_response_code();
+            RequestTiming::record($start, $booted, hrtime(true), is_int($status) ? $status : 500, $workerRequest, $reused);
             return true;
         }
 
@@ -168,5 +182,47 @@ final readonly class FrontendWorker
         RequestTiming::record($start, $booted, hrtime(true), is_int($status) ? $status : 200, $workerRequest, $reused);
 
         return true;
+    }
+
+    /**
+     * What TYPO3's own exception handler answers to an exception nothing in
+     * the application caught: the status the exception asks for (404 for a
+     * page that does not exist on a site without error handling, not 500) and
+     * TYPO3's error page, or the debug page where TYPO3 is configured to show
+     * one. Without a worker PHP calls that handler itself; in the worker loop
+     * the exception never gets that far.
+     *
+     * Null when there is nothing to show: the bootstrap failed before it
+     * registered a handler, the handler printed nothing, or it failed itself.
+     *
+     * @param mixed $workerExceptionHandler the handler in place before the loop started, which is not TYPO3's
+     */
+    private static function errorPage(\Throwable $e, mixed $workerExceptionHandler): ?string
+    {
+        $handler = RequestStateReset::currentHandlers()[1];
+        if (!is_callable($handler) || $handler === $workerExceptionHandler) {
+            return null;
+        }
+
+        $level = ob_get_level();
+        ob_start();
+        try {
+            $handler($e);
+            $page = (string) ob_get_contents();
+        } catch (\Throwable $failure) {
+            error_log(sprintf(
+                'FrankenPHP worker: the exception handler failed too: %s in %s:%d',
+                $failure->getMessage(),
+                $failure->getFile(),
+                $failure->getLine()
+            ));
+            $page = '';
+        } finally {
+            while (ob_get_level() > $level) {
+                ob_end_clean();
+            }
+        }
+
+        return $page === '' ? null : $page;
     }
 }
