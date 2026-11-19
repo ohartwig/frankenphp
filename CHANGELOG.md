@@ -3,6 +3,16 @@
 This package continues `moselwal/frankenphp` (last release 5.3.5) as
 `koh/frankenphp` with a fresh history. Releases from 5.4.0 on are listed here.
 
+## [5.15.1](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.15.0...v5.15.1) (2026-11-19)
+
+### :bug: Fixes
+
+* **worker:** answer an uncaught exception with TYPO3's exception handler ([6f6ec18](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/6f6ec1890badd9c294c4ae1ce8306da418d7ed8b))
+
+### :memo: Documentation
+
+* describe how the worker answers an uncaught exception ([c2d6398](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/commit/c2d639803ed9b279b46c38a5b96b57b4dd24778d))
+
 ## [5.15.0](https://git.ole-hartwig.eu/ai-ready-platform/platform/frankenphp/compare/v5.14.2...v5.15.0) (2026-11-19)
 
 ### :sparkles: Features
