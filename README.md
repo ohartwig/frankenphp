@@ -37,7 +37,7 @@ TYPO3 extension for FrankenPHP worker-mode integration and Caddy/Souin HTTP cach
 | Variable | Description | Default |
 |---|---|---|
 | `TYPO3_BACKEND_ENTRYPOINT` | Backend entry point (path or URL) | `/typo3` |
-| `MAX_REQUESTS` | Requests per worker lifecycle | `500` |
+| `MAX_REQUESTS` | Requests a worker serves before it ends and a fresh one starts. Each worker moves the value by up to 10 % in either direction, so the workers of a pod do not restart at the same moment | `500` |
 | `TYPO3_AUTOLOAD_PATH` | Path to `vendor/autoload.php` | auto-detected |
 | `DB_REUSE` | Keep database connections between requests; `0` closes them after every request, as before | `1` |
 | `DB_REUSE_IDLE_TIMEOUT` | Seconds a kept connection may sit idle; keep it well below the server's `wait_timeout` (`0` = no limit) | `60` |

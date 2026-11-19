@@ -10,7 +10,8 @@ declare(strict_types=1);
  *
  * Environment variables:
  *   TYPO3_BACKEND_ENTRYPOINT  Backend entry point path or URL (default: /typo3)
- *   MAX_REQUESTS              Requests per worker lifecycle    (default: 500)
+ *   MAX_REQUESTS              Requests per worker lifecycle, each worker
+ *                             moves it by up to 10 % (default: 500)
  *   TYPO3_AUTOLOAD_PATH       Path to vendor/autoload.php     (auto-detected)
  *   DB_REUSE                  Keep database connections between requests (default: 1)
  *   DB_REUSE_IDLE_TIMEOUT     Seconds a kept connection may sit idle      (default: 60)
@@ -40,12 +41,11 @@ use Koh\FrankenPHP\Runtime\DatabaseConnectionReuse;
 use Koh\FrankenPHP\Runtime\FrontendWorker;
 use Koh\FrankenPHP\Runtime\PersistentBootstrap;
 use Koh\FrankenPHP\Runtime\RequestClassifier;
+use Koh\FrankenPHP\Runtime\RequestLimit;
 
 $backendEntryPoint = $_ENV['TYPO3_BACKEND_ENTRYPOINT']
     ?? $_SERVER['TYPO3_BACKEND_ENTRYPOINT']
     ?? '/typo3';
-
-$maxRequests = (int) ($_ENV['MAX_REQUESTS'] ?? 500);
 
 $classifier = new RequestClassifier($backendEntryPoint);
 // Settings may come from the worker's `env` lines in the Caddyfile or from the
@@ -54,4 +54,4 @@ $environment = $_ENV + $_SERVER + getenv();
 $connections = DatabaseConnectionReuse::fromEnvironment($environment);
 $persistent = PersistentBootstrap::isEnabled($environment) ? new PersistentBootstrap() : null;
 $worker = new FrontendWorker($classifier, $autoloadPath, $connections, $persistent);
-$worker->run($maxRequests);
+$worker->run(RequestLimit::fromEnvironment($environment));
