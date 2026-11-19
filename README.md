@@ -501,4 +501,4 @@ test fails.
 
 ## License
 
-GPL-2.0-or-later
+MIT, see [LICENSE](LICENSE). TYPO3 itself is GPL-2.0-or-later; MIT is compatible with it.
